@@ -1,0 +1,11 @@
+{
+  "name": "dudri", "private": true,
+  "scripts": {
+    "dev": "npm --prefix frontend run dev",
+    "build": "npm --prefix frontend run build",
+    "typecheck": "npm --prefix frontend run typecheck",
+    "test:api": "uv run --directory backend pytest -q",
+    "api": "uv run --directory backend uvicorn app.main:app --host 127.0.0.1 --port 8000",
+    "migrate": "uv run --directory backend alembic upgrade head"
+  }
+}
