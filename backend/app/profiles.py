@@ -1,17 +1,19 @@
 from datetime import date
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Query
-from pydantic import Field, HttpUrl, model_validator
+from fastapi import APIRouter, Header, HTTPException, Query, UploadFile
+from fastapi.responses import Response
+from pydantic import Field, model_validator
 from sqlalchemy import delete, select
 
-from .auth import Actor, Input
+from .auth import Actor, Input, current_user
 from .common import DB, Page, data, facts_changed, lock_user, owner, required, update_revision
 from .models import (
     Affiliation,
     CareerEvent,
     Preference,
     Profile,
+    ProfileAvatar,
     Project,
     ProjectMember,
     Tag,
@@ -71,6 +73,7 @@ def public_user(db, user):
 @router.get("/me")
 def me(db: DB, user: Actor):
     return {"id": user.id, "login_email": user.login_email, "account_status": user.account_status,
+            "subscription_plan": user.subscription_plan,
             "google_connected": bool(user.supabase_user_id),
             "profile": data(required(db, Profile, user.id)),
             "school_affiliations": affiliations_for(db, user.id),
@@ -81,7 +84,6 @@ class ProfilePatch(Input):
     revision: int = Field(ge=1)
     display_name: str | None = Field(default=None, min_length=1, max_length=100)
     bio: str | None = Field(default=None, max_length=5000)
-    avatar_url: HttpUrl | None = None
     name_is_public: bool | None = None
     bio_is_public: bool | None = None
     avatar_is_public: bool | None = None
@@ -96,6 +98,76 @@ def edit_me(body: ProfilePatch, db: DB, user: Actor):
     profile = update_revision(db, required(db, Profile, user.id), body.revision, changes)
     facts_changed(db, user.id)
     return data(profile)
+
+
+MAX_AVATAR_BYTES = 2 * 1024 * 1024
+# Multipart boundaries and the field name add a small amount of framing around
+# the file bytes.  This cap is enforced before Starlette parses/spools the
+# multipart body in main.py.
+MAX_AVATAR_REQUEST_BYTES = MAX_AVATAR_BYTES + 128 * 1024
+
+
+def image_content_type(raw: bytes) -> str | None:
+    """Recognize only non-scriptable raster image formats from their bytes."""
+    if raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if raw.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if raw.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if raw.startswith(b"RIFF") and raw[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
+@router.post("/me/avatar")
+async def upload_avatar(file: UploadFile, db: DB, user: Actor):
+    """Persist a small profile avatar in PostgreSQL, not an ephemeral disk."""
+    raw = await file.read(MAX_AVATAR_BYTES + 1)
+    await file.close()
+    content_type = image_content_type(raw)
+    if not raw or len(raw) > MAX_AVATAR_BYTES or not content_type:
+        raise HTTPException(422, "PNG, JPEG, GIF 또는 WebP 이미지(최대 2MB)를 선택해 주세요.")
+    lock_user(db, user.id)
+    avatar = db.get(ProfileAvatar, user.id)
+    if avatar:
+        avatar.content_type, avatar.content, avatar.byte_size = content_type, raw, len(raw)
+        avatar.revision += 1
+        avatar.updated_at = now()
+    else:
+        avatar = ProfileAvatar(user_id=user.id, content_type=content_type, content=raw, byte_size=len(raw))
+        db.add(avatar)
+        db.flush()
+    profile = required(db, Profile, user.id)
+    profile = update_revision(db, profile, profile.revision,
+                              {"avatar_url": f"/api/v1/users/{user.id}/avatar?v={avatar.revision}"})
+    facts_changed(db, user.id)
+    return data(profile)
+
+
+@router.delete("/me/avatar", status_code=204)
+def remove_avatar(db: DB, user: Actor, revision: int = Query(ge=1)):
+    lock_user(db, user.id)
+    avatar = db.get(ProfileAvatar, user.id)
+    if avatar:
+        db.delete(avatar)
+    update_revision(db, required(db, Profile, user.id), revision, {"avatar_url": None})
+    facts_changed(db, user.id)
+
+
+@router.get("/users/{user_id}/avatar")
+def avatar(user_id: str, db: DB, authorization: str | None = Header(default=None)):
+    person = required(db, User, user_id)
+    profile = required(db, Profile, user_id)
+    actor = current_user(db, authorization) if authorization else None
+    if person.account_status != "active" or not profile.avatar_is_public and (not actor or actor.id != user_id):
+        # A missing response avoids turning private avatar URLs into an oracle.
+        raise HTTPException(404, "프로필 이미지를 찾을 수 없습니다.")
+    image = db.get(ProfileAvatar, user_id)
+    if not image:
+        raise HTTPException(404, "프로필 이미지를 찾을 수 없습니다.")
+    return Response(content=image.content, media_type=image.content_type,
+                    headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
 
 
 @router.get("/users/{user_id}")

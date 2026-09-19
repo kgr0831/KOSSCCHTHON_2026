@@ -45,21 +45,33 @@ export async function refreshSession(): Promise<boolean> {
   return refreshPromise;
 }
 
-export async function api<T>(path: string, options: RequestInit = {}, retry = true): Promise<T> {
+async function fetchWithSession(path: string, options: RequestInit, retry: boolean): Promise<Response> {
   const generation = authGeneration;
   const headers = new Headers(options.headers);
   if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
   if (options.body && !(options.body instanceof FormData)) headers.set("Content-Type", "application/json");
   let response: Response;
   try {
-    response = await fetch(`/api/v1${path}`, { ...options, headers, credentials: "same-origin", cache: "no-store" });
+    const apiPath = path.startsWith("/api/") ? path : `/api/v1${path}`;
+    response = await fetch(apiPath, { ...options, headers, credentials: "same-origin", cache: "no-store" });
   } catch { throw new ApiError(0, connectionMessage, "BACKEND_UNAVAILABLE"); }
   if (response.status === 401 && retry && !path.startsWith("/auth/")) {
     if (generation !== authGeneration) throw new ApiError(401, "로그인 계정이 변경되었어요. 현재 계정에서 다시 요청해 주세요.", "SESSION_CHANGED");
     const refreshed = await refreshSession();
     if (generation !== authGeneration) throw new ApiError(401, "로그인 계정이 변경되었어요. 현재 계정에서 다시 요청해 주세요.", "SESSION_CHANGED");
-    if (refreshed) return api<T>(path, options, false);
+    if (refreshed) return fetchWithSession(path, options, false);
   }
+  return response;
+}
+
+// Use this for non-JSON API responses such as protected image assets. It keeps
+// the same in-memory authorization and one-refresh retry contract as api().
+export async function authorizedFetch(path: string, options: RequestInit = {}): Promise<Response> {
+  return fetchWithSession(path, options, true);
+}
+
+export async function api<T>(path: string, options: RequestInit = {}, retry = true): Promise<T> {
+  const response = await fetchWithSession(path, options, retry);
   if (!response.ok) {
     throw await responseError(response);
   }
@@ -69,14 +81,66 @@ export async function api<T>(path: string, options: RequestInit = {}, retry = tr
 
 export const jsonBody = (data: unknown) => JSON.stringify(data);
 export type Page<T> = { items: T[]; next_cursor: string | null };
+export type SourceMaterial = {
+  id: string;
+  display_name: string;
+  material_kind: string;
+  access_status: string;
+  canonical_url: string | null;
+  is_private: boolean;
+  revision: number;
+  created_at: string;
+};
+export type ExternalAccount = {
+  id: string;
+  provider: string;
+  login: string;
+  created_at?: string;
+};
+export type GithubRepository = {
+  repository_id?: string | number;
+  id?: string | number;
+  display_name?: string;
+  name?: string;
+  full_name: string;
+  private: boolean;
+  canonical_url?: string | null;
+  html_url?: string | null;
+  description?: string | null;
+  updated_at?: string | null;
+};
+export type GithubConnect = { url: string };
+export type SubscriptionPlan = "free" | "premium";
+export type Subscription = { plan: SubscriptionPlan };
+export type DocumentReference = {
+  id: string;
+  site_kind: "portfolio" | "profile_pr" | "cv" | "cover_letter";
+  display_name: string;
+  reference_format: "pdf" | "png" | "jpg" | "txt" | "html" | "docx";
+  content_type: string;
+  byte_size: number;
+  revision: number;
+  created_at: string;
+};
+export type Rewards = {
+  points: number;
+  opportunities: {
+    period: string;
+    limit: number;
+    bonus: number;
+    used: number;
+    remaining: number;
+    resets_at: string;
+  };
+};
 export type Profile = { user_id: string; display_name: string; bio: string; avatar_url: string | null; name_is_public: boolean; bio_is_public: boolean; avatar_is_public: boolean; revision: number };
 export type Affiliation = { id: string; university_id: string; university_name: string; department: string; enrollment_status: string; entry_year: number | null; graduation_year: number | null; is_public: boolean; revision: number };
 export type Preference = { coffee_chat_available: boolean; project_available: boolean; learning_stage: string; activity_goal: string; hours_per_week: number | null; collaboration_mode: string; is_public: boolean; revision: number };
-export type UserSelf = { id: string; login_email: string; google_connected?: boolean; profile: Profile; school_affiliations: Affiliation[]; preferences: Preference; tags: UserTag[] };
+export type UserSelf = { id: string; login_email: string; subscription_plan?: SubscriptionPlan; google_connected?: boolean; profile: Profile; school_affiliations: Affiliation[]; preferences: Preference; tags: UserTag[] };
 export type UserTag = { id: string; tag_id: string; name: string; kind: string; usage: string; is_public: boolean };
 export type Career = { id: string; event_kind: string; title: string; organization_name: string; description: string; started_on: string | null; ended_on: string | null; is_public: boolean; revision: number };
 export type UserPublic = { id: string; can_request_coffee_chat?: boolean; display_name: string; bio?: string; avatar_url?: string; school_affiliations: Affiliation[]; career_events: Career[]; preferences?: Preference; tags: UserTag[]; verifications: { kind: string; meaning: string }[]; project_members: { id: string; project_title: string; role: string; contribution: string }[] };
-export type Project = { id: string; creator_id: string; title: string; summary: string; goal: string; visibility: string; project_status: string; revision: number; member_count?: number };
+export type Project = { id: string; creator_id: string; title: string; summary: string; goal: string; visibility: string; project_status: string; revision: number; member_count?: number; viewer_is_member?: boolean; viewer_request_status?: string | null; viewer_request_kind?: string | null };
 export type Opening = { id: string; role: string; capacity: number; filled: number; skills: string[]; experience: string };
 export type Recruitment = { id: string; project_id: string; project_title: string; creator_id: string; description: string; status: string; hours_per_week: number | null; collaboration_mode: string; duration: string; revision: number; role_openings: Opening[] };
 export type Coffee = { id: string; requester_id: string; recipient_id: string; purpose: string; introduction: string; questions: string; revision: number; status: string; booking_id: string | null; proposed_slots: { id: string; starts_at: string; ends_at: string }[] };

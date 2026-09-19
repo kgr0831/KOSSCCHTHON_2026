@@ -31,6 +31,7 @@ from .models import (
     User,
     now,
 )
+from .rewards import consume_opportunity, grant_coffee_completion_rewards
 
 router = APIRouter(prefix="/api/v1")
 
@@ -120,6 +121,9 @@ def create_chat(body: CoffeeInput, db: DB, user: Actor,
         raise HTTPException(409, "현재 커피챗 요청을 받지 않는 사용자입니다.")
     if any(slot.starts_at <= now() for slot in body.proposed_slots):
         raise HTTPException(422, "희망 일정은 미래 시각이어야 합니다.")
+    # All validation above has succeeded and an idempotent retry has already
+    # returned, so this is the only point at which a request spends a chance.
+    consume_opportunity(db, user)
     row = CoffeeRequest(requester_id=user.id, **body.model_dump(exclude={"proposed_slots"}))
     db.add(row)
     db.flush()
@@ -286,6 +290,7 @@ def claim_attendance(booking_id: str, body: ClaimInput, db: DB, user: Actor):
         if all(x.attendance_claim == "attended" for x in records):
             booking.status = "completed"
             booking.revision += 1
+            grant_coffee_completion_rewards(db, booking, chat.requester_id, chat.recipient_id)
             for x in records:
                 db.add(TrustEvent(user_id=x.user_id, booking_id=booking.id, event_kind="mutual_completion",
                                   evidence={"source": "mutual_attendance_claim", "claimed_at": data(x)["claimed_at"]}))

@@ -11,7 +11,10 @@ from .config import ROOT, get_settings
 from .db import Base, make_engine
 
 SOURCE = ROOT / "backend/.data/dudri.db"
-SKIPPED = {"auth_sessions", "auth_challenges", "external_accounts", "idempotency_records"}
+# Authentication/session-like rows must not cross environments.  Realtime
+# tickets are one-time credentials and event rows are disposable invalidation
+# hints, so neither belongs in a durable user-data transfer.
+SKIPPED = {"auth_sessions", "auth_challenges", "external_accounts", "idempotency_records", "realtime_tickets", "realtime_events"}
 
 
 class TransferError(Exception):
@@ -27,7 +30,11 @@ def source_engine(path: Path):
 
 
 def counts(connection):
-    return {table.name: connection.scalar(select(func.count()).select_from(table))
+    available = set(inspect(connection).get_table_names())
+    # A historical SQLite export can predate a later feature table.  It is an
+    # empty table for transfer purposes, rather than a reason to abandon a
+    # non-destructive import of the rest of the user's data.
+    return {table.name: connection.scalar(select(func.count()).select_from(table)) if table.name in available else 0
             for table in Base.metadata.sorted_tables if table.name not in SKIPPED}
 
 
@@ -42,9 +49,12 @@ def copy_rows(source, target):
         raise TransferError("Target already contains application data; nothing was copied. Use a new empty database.")
     expected = counts(source)
     source_schema = inspect(source)
+    source_tables = set(source_schema.get_table_names())
     deferred = []
     for table in tables:
         if table.name in SKIPPED:
+            continue
+        if table.name not in source_tables:
             continue
         # Do not even read worker lease tokens or external credential records.
         available = {column["name"] for column in source_schema.get_columns(table.name)}

@@ -62,6 +62,10 @@ for (const width of [320, 390, 768, 1024, 1440]) {
 test("calendar loads all pages, groups midnight locally, and switches views", async ({ page }) => {
   await fixtures(page);
   await page.goto("/coffee");
+  const upcoming = page.locator(".coffee-upcoming");
+  await expect(upcoming).toBeVisible();
+  await expect(upcoming.locator(".coffee-upcoming-card")).toHaveCount(2);
+  expect((await upcoming.boundingBox())!.y).toBeLessThan((await page.locator(".coffee-tabs").boundingBox())!.y);
   const calendar = page.getByRole("region", { name: "커피챗 캘린더" });
   await calendar.getByRole("button", { name: "9월 21일 월요일, 일정 1개", exact: true }).click();
   await expect(calendar.locator(".calendar-selected")).toContainText("자정을 넘기는 커피챗");
@@ -83,11 +87,41 @@ test("calendar loads all pages, groups midnight locally, and switches views", as
   await expect(calendar.locator(".calendar-selected")).toContainText("9월 21일");
 });
 
+test("upcoming coffee chats stay above requests and the calendar at desktop and mobile widths", async ({ page }) => {
+  await fixtures(page);
+  for (const width of [390, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/coffee");
+    const upcoming = page.locator(".coffee-upcoming");
+    await expect(upcoming).toBeVisible();
+    expect((await upcoming.boundingBox())!.y).toBeLessThan((await page.locator(".coffee-tabs").boundingBox())!.y);
+    await expect(page.getByRole("region", { name: "커피챗 캘린더" })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  }
+});
+
+test("empty upcoming coffee state stays compact", async ({ page }) => {
+  await fixtures(page);
+  await page.route("**/api/v1/me/bookings**", route => route.fulfill({ json: empty }));
+  for (const width of [390, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/coffee");
+    const compact = page.locator(".coffee-upcoming-empty");
+    await expect(compact).toBeVisible();
+    await expect(page.locator(".coffee-upcoming .empty")).toHaveCount(0);
+    expect((await compact.boundingBox())!.height).toBeLessThan(180);
+  }
+});
+
 test("interpreted conditions are visible and editable before search", async ({ page }, testInfo) => {
   await fixtures(page);
   await page.goto("/explore");
   await page.getByRole("textbox", { name: "찾고 싶은 동문" }).fill("게임을 함께 만들 동료");
-  await page.getByRole("button", { name: "AI로 조건 정리" }).click();
+  const interpret = page.getByRole("button", { name: "AI로 조건 정리" });
+  await expect(interpret).toHaveAttribute("type", "button");
+  await interpret.click();
+  await expect(page.locator("#ai-condition-status")).toHaveAttribute("role", "status");
+  await expect(page.locator("#ai-condition-status")).toContainText("AI가 조건을 정리했어요");
   await expect(page.getByLabel("국민대학교", { exact: true })).toBeChecked();
   await expect(page.getByLabel("숭실대학교", { exact: true })).toBeChecked();
   await expect(page.getByLabel("기획", { exact: true })).toBeChecked();
@@ -100,6 +134,34 @@ test("interpreted conditions are visible and editable before search", async ({ p
   await expect(page.getByRole("heading", { name: "김서준" })).toBeVisible();
   await page.getByRole("button", { name: "상세 조건", exact: true }).click();
   await page.screenshot({ path: testInfo.outputPath("explore-desktop.png"), fullPage: true });
+});
+
+test("AI condition failures are announced without hiding editable filters", async ({ page }) => {
+  await fixtures(page);
+  await page.route("**/api/v1/search/interpret", route => route.fulfill({ status: 422, json: { detail: "조건을 해석할 수 없어요." } }));
+  await page.goto("/explore");
+  await page.getByRole("textbox", { name: "찾고 싶은 동문" }).fill("모호한 조건");
+  await page.getByRole("button", { name: "AI로 조건 정리" }).click();
+  const status = page.locator("#ai-condition-status");
+  await expect(status).toHaveAttribute("role", "alert");
+  await expect(status).toContainText("AI 조건 정리에 실패했어요");
+  await expect(page.getByRole("button", { name: "AI로 조건 정리" })).toBeEnabled();
+});
+
+test("AI condition pending work is announced before editable filters are applied", async ({ page }) => {
+  await fixtures(page);
+  let finish!: () => void;
+  const response = new Promise<void>(resolve => { finish = resolve; });
+  await page.route("**/api/v1/search/interpret", async route => {
+    await response;
+    await route.fulfill({ json: { purpose: "coffee_chat", match_direction: "similar", filters: { university_ids: [], coffee_chat_available: true } } });
+  });
+  await page.goto("/explore");
+  await page.getByRole("textbox", { name: "찾고 싶은 동문" }).fill("백엔드 동료");
+  await page.getByRole("button", { name: "AI로 조건 정리" }).click();
+  await expect(page.locator("#ai-condition-status")).toContainText("AI가 입력한 문장을 검색 조건으로 정리하고 있어요");
+  finish();
+  await expect(page.locator("#ai-condition-status")).toContainText("AI가 조건을 정리했어요");
 });
 
 test("booking shows proposed changes and validates reschedule input", async ({ page }) => {

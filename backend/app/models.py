@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, DateTime, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base
@@ -26,6 +26,10 @@ class User(Entity, Base):
     login_email: Mapped[str] = mapped_column(String(254), unique=True)
     supabase_user_id: Mapped[str | None] = mapped_column(String(36), unique=True)
     account_status: Mapped[str] = mapped_column(default="active")
+    # Payment is intentionally out of scope for now. The selected plan is
+    # still durable account state so every API worker enforces the same AI
+    # document entitlement.
+    subscription_plan: Mapped[str] = mapped_column(String(20), default="free", server_default="free")
     is_admin: Mapped[bool] = mapped_column(default=False)
     # Locks all fact mutations, snapshots and publication decisions for this owner.
     facts_revision: Mapped[int] = mapped_column(default=1)
@@ -41,6 +45,24 @@ class Profile(Base):
     bio_is_public: Mapped[bool] = mapped_column(default=True)
     avatar_is_public: Mapped[bool] = mapped_column(default=True)
     revision: Mapped[int] = mapped_column(default=1)
+
+
+class ProfileAvatar(Base):
+    """A small, durable profile image kept with the user's PostgreSQL data.
+
+    Render's filesystem is ephemeral on the free service, so avatars must not
+    be written to a local uploads directory.  Keeping the bounded binary in
+    the existing database also avoids adding a separately configured storage
+    service just for this one asset.
+    """
+
+    __tablename__ = "profile_avatars"
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    content_type: Mapped[str] = mapped_column(String(100))
+    content: Mapped[bytes] = mapped_column(LargeBinary)
+    byte_size: Mapped[int] = mapped_column(Integer)
+    revision: Mapped[int] = mapped_column(default=1)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
 class University(Entity, Base):
@@ -297,6 +319,9 @@ class Booking(Entity, Base):
     meeting_location: Mapped[str]
     status: Mapped[str] = mapped_column(default="confirmed")
     revision: Mapped[int] = mapped_column(default=1)
+    # Completion rewards are granted atomically at most once when both
+    # participants attest attendance.
+    completion_rewarded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class BookingChange(Entity, Base):
@@ -339,6 +364,32 @@ class TrustEvent(Entity, Base):
     evidence: Mapped[dict] = mapped_column(JSON)
 
 
+class MonthlyOpportunity(Entity, Base):
+    """A retained monthly usage row; a new month starts with a new row."""
+
+    __tablename__ = "monthly_opportunities"
+    __table_args__ = (UniqueConstraint("user_id", "period_key"),)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    period_key: Mapped[str] = mapped_column(String(7))
+    used_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    bonus_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+
+
+class PointTransaction(Entity, Base):
+    """Append-only points earned from a completed coffee chat.
+
+    Points intentionally have no spending endpoint yet. The row-level unique
+    key is an additional guard alongside Booking.completion_rewarded_at.
+    """
+
+    __tablename__ = "point_transactions"
+    __table_args__ = (UniqueConstraint("booking_id", "user_id", "reason"),)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    booking_id: Mapped[str] = mapped_column(ForeignKey("coffee_bookings.id"), index=True)
+    amount: Mapped[int] = mapped_column(Integer)
+    reason: Mapped[str] = mapped_column(String(100))
+
+
 class Notification(Entity, Base):
     __tablename__ = "notifications"
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
@@ -347,6 +398,34 @@ class Notification(Entity, Base):
     href: Mapped[str]
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deduplication_key: Mapped[str | None] = mapped_column(unique=True)
+
+
+class RealtimeTicket(Entity, Base):
+    """One-time, short-lived WebSocket credential.
+
+    The browser cannot attach the in-memory Bearer token to a WebSocket
+    handshake.  Only the digest is persisted, and the raw ticket travels in a
+    WebSocket subprotocol rather than a URL or access log.
+    """
+
+    __tablename__ = "realtime_tickets"
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    # Bind the one-time socket credential to the bearer session that issued
+    # it.  A logout or refresh-family revocation then closes the socket on its
+    # next poll instead of leaving a short-lived credential usable.
+    session_id: Mapped[str] = mapped_column(ForeignKey("auth_sessions.id"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class RealtimeEvent(Entity, Base):
+    """Small invalidation-only events shared by all API instances."""
+
+    __tablename__ = "realtime_events"
+    target_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(100))
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
 class PersonalSite(Entity, Base):
@@ -375,6 +454,36 @@ class SiteVersion(Entity, Base):
     gui: Mapped[dict] = mapped_column(JSON, default=dict)
     validation: Mapped[dict] = mapped_column(JSON, default=dict)
     error: Mapped[str | None]
+
+
+class DocumentReference(Entity, Base):
+    """A private, user-selected input for one kind of generated document.
+
+    Text is stored only for formats we can extract safely.  PNG/JPEG bytes are
+    kept private until a Codex CLI generation explicitly attaches them, then
+    written to a short-lived request directory and removed with that directory.
+    """
+
+    __tablename__ = "document_references"
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    site_kind: Mapped[str] = mapped_column(String(30), index=True)
+    display_name: Mapped[str] = mapped_column(String(200))
+    reference_format: Mapped[str] = mapped_column(String(20))
+    content_type: Mapped[str] = mapped_column(String(100))
+    text_content: Mapped[str | None] = mapped_column(Text)
+    image_content: Mapped[bytes | None] = mapped_column(LargeBinary)
+    byte_size: Mapped[int] = mapped_column(Integer)
+    access_status: Mapped[str] = mapped_column(String(20), default="available")
+    revision: Mapped[int] = mapped_column(default=1)
+
+
+class SiteVersionReferenceInput(Base):
+    """Reference revision chosen when an asynchronous document job was queued."""
+
+    __tablename__ = "site_version_reference_inputs"
+    version_id: Mapped[str] = mapped_column(ForeignKey("site_versions.id"), primary_key=True)
+    reference_id: Mapped[str] = mapped_column(ForeignKey("document_references.id"), primary_key=True)
+    reference_revision: Mapped[int]
 
 
 class Publication(Entity, Base):

@@ -6,6 +6,7 @@ import { Bell, ChevronRight, Coffee, Compass, House, LogOut, Plus, UserRound, X 
 import { useEffect, useRef, useState } from "react";
 import AuthPage from "@/app/auth/page";
 import { useAuth } from "./providers";
+import { Avatar } from "./avatar";
 import { Brand } from "./brand";
 
 const navigation = [
@@ -30,9 +31,9 @@ export default function Shell({ children }: { children: React.ReactNode }) {
   const [error, setError] = useState("");
   const openRegistration = () => { dialog.current?.showModal(); setRegisterOpen(true); };
   const closeRegistration = () => { dialog.current?.close(); setRegisterOpen(false); };
-  const isActive = (href: string) => href === "/" ? path === "/" : href === "/my" ? ["/my", "/profile", "/studio", "/settings", "/materials", "/career", "/projects", "/notifications"].some(x => path.startsWith(x)) : href === "/coffee" ? path.startsWith("/coffee") || path.startsWith("/bookings") : path.startsWith(href) || path.startsWith("/users");
+  const isActive = (href: string) => href === "/" ? path === "/" : href === "/my" ? ["/my", "/profile", "/studio", "/settings", "/materials", "/pricing", "/career", "/projects", "/notifications"].some(x => path.startsWith(x)) : href === "/coffee" ? path.startsWith("/coffee") || path.startsWith("/bookings") : path.startsWith(href) || path.startsWith("/users");
   const currentPersonal = personal.find(x => path === x.href || path.startsWith(x.href + "/"));
-  const location = currentPersonal?.title || (path === "/settings/ai" ? "AI 연결 설정" : path === "/materials" ? "내 자료" : navigation.find(x => isActive(x.href))?.title || "두드리");
+  const location = currentPersonal?.title || (path === "/settings/ai" ? "AI 연결 설정" : path === "/materials" ? "내 자료" : path === "/pricing" ? "요금제" : navigation.find(x => isActive(x.href))?.title || "두드리");
   useEffect(() => { document.title = `${location} · 두드리`; }, [location]);
   const item = (nav: typeof navigation[number]) => <Link key={nav.href} href={nav.href} aria-current={isActive(nav.href) ? "page" : undefined} className={`nav-item ${isActive(nav.href) ? "active" : ""}`}><span className="nav-icon"><nav.icon size={20} /></span><span>{nav.title}</span></Link>;
   const register = (mobile = false) => <button className={mobile ? "nav-register" : "button primary register-desktop"} onClick={openRegistration} aria-haspopup="dialog" aria-expanded={registerOpen}><span className="register-symbol"><Plus size={23} /></span><span>등록{!mobile && "하기"}</span></button>;
@@ -46,10 +47,10 @@ export default function Shell({ children }: { children: React.ReactNode }) {
       {register()}
       <nav className="sidebar-personal" aria-label="나의 공간"><span className="nav-label">나의 공간</span>{personal.map(x => <Link key={x.href} className={`utility-link ${currentPersonal?.href === x.href ? "active" : ""}`} aria-current={currentPersonal?.href === x.href ? "page" : undefined} href={x.href}>{x.title}<ChevronRight size={15} /></Link>)}</nav>
       <div className="sidebar-bottom"><div className="sidebar-note"><span className="mini-brand"><img src="/figma/logo.png" alt="" width="28" height="28" /></span><strong>처음이어도 괜찮아요</strong><p>작은 관심사 하나에서<br />새로운 연결이 시작돼요.</p><Link href="/explore">동문 만나보기 <ChevronRight size={14} /></Link></div>
-        {!ready ? <div className="account-placeholder" aria-label="계정 확인 중" /> : user ? <div className="account"><Link href="/my" className="avatar small" aria-label="마이 페이지">{user.profile.display_name.slice(0, 1)}</Link><div><strong>{user.profile.display_name}</strong><small>나의 다음 이야기</small></div><button aria-label="로그아웃" className="icon-button" onClick={() => logout().catch(e => setError(e.message))}><LogOut size={17} /></button></div> : <Link className="button subtle wide" href="/auth">로그인 · 회원가입</Link>}
+        {!ready ? <div className="account-placeholder" aria-label="계정 확인 중" /> : user ? <div className="account"><Link href="/my" aria-label="마이 페이지"><Avatar className="avatar small" src={user.profile.avatar_url} name={user.profile.display_name} privateAccess /></Link><div><strong>{user.profile.display_name}</strong><small>나의 다음 이야기</small></div><button aria-label="로그아웃" className="icon-button" onClick={() => logout().catch(e => setError(e.message))}><LogOut size={17} /></button></div> : <Link className="button subtle wide" href="/auth">로그인 · 회원가입</Link>}
       </div>
     </aside>
-    <div className="main-frame"><header className="topbar"><div className="mobile-brand"><Brand /></div><p className="topbar-context"><span className="live-dot" /> {isActive("/my") ? "나의 공간" : "두드리"}<ChevronRight size={14} /><strong>{location}</strong></p><div className="topbar-actions"><Link href="/notifications" className="icon-button notification-button" aria-label="알림"><Bell size={19} /></Link>{!ready ? <span className="avatar small account-placeholder" /> : user ? <Link href="/my" className="avatar small" aria-label="마이 페이지">{user.profile.display_name.slice(0, 1)}</Link> : <Link href="/auth" className="text-link">로그인</Link>}</div></header>
+    <div className="main-frame"><header className="topbar"><div className="mobile-brand"><Brand /></div><p className="topbar-context"><span className="live-dot" /> {isActive("/my") ? "나의 공간" : "두드리"}<ChevronRight size={14} /><strong>{location}</strong></p><div className="topbar-actions"><Link href="/notifications" className="icon-button notification-button" aria-label="알림"><Bell size={19} /></Link>{!ready ? <span className="avatar small account-placeholder" /> : user ? <Link href="/my" aria-label="마이 페이지"><Avatar className="avatar small" src={user.profile.avatar_url} name={user.profile.display_name} privateAccess /></Link> : <Link href="/auth" className="text-link">로그인</Link>}</div></header>
       <div className="mobile-location" aria-label="현재 화면">{isActive("/my") && <span>나의 공간 <ChevronRight size={12} /></span>}<strong>{location}</strong></div>
       <main id="main" className="main-content">{connectionError && <div role="alert" className="notice error"><p>{connectionError}</p><button className="button subtle" onClick={reconnect}>다시 연결</button></div>}{error && <p role="alert" className="notice error">{error}</p>}<AppOutlet fallback={children} /></main><footer className="footer"><span>두드리 · 서로의 경험이 다음 가능성이 되는 곳</span><span>함께, 한 걸음 더</span></footer>
     </div>

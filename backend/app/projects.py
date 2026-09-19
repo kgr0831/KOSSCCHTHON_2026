@@ -20,6 +20,7 @@ from .common import (
 )
 from .models import (
     Material,
+    Notification,
     Project,
     ProjectMember,
     ProjectRequest,
@@ -28,12 +29,15 @@ from .models import (
     RoleOpening,
     User,
 )
+from .rewards import consume_opportunity
 
 router = APIRouter(prefix="/api/v1")
 
 
 def get_project(db, project_id, user, manage=False):
     row = required(db, Project, project_id)
+    if row.visibility == "withdrawn":
+        raise HTTPException(404, "철회된 프로젝트입니다.")
     if manage and row.creator_id != user.id:
         raise HTTPException(403, "프로젝트 관리자 권한이 필요합니다.")
     if not manage and row.visibility != "public" and row.creator_id != user.id:
@@ -41,15 +45,50 @@ def get_project(db, project_id, user, manage=False):
                                                       ProjectMember.user_id == user.id))
         if not member:
             raise HTTPException(403, "비공개 프로젝트입니다.")
-    if row.visibility == "withdrawn":
-        raise HTTPException(404, "철회된 프로젝트입니다.")
     return row
 
 
-def project_data(db, row):
+def project_data(db, row, viewer=None):
     result = data(row)
     result["member_count"] = len(list(db.scalars(select(ProjectMember.id).where(ProjectMember.project_id == row.id))))
+    if viewer:
+        member = db.scalar(select(ProjectMember.id).where(ProjectMember.project_id == row.id,
+                                                           ProjectMember.user_id == viewer.id))
+        pending = db.scalar(select(ProjectRequest).where(ProjectRequest.project_id == row.id,
+                                                          ProjectRequest.candidate_id == viewer.id,
+                                                          ProjectRequest.status == "pending")
+                            .order_by(ProjectRequest.created_at.desc()))
+        latest = pending or db.scalar(select(ProjectRequest).where(ProjectRequest.project_id == row.id,
+                                                                    ProjectRequest.candidate_id == viewer.id)
+                                      .order_by(ProjectRequest.created_at.desc()))
+        result["viewer_is_member"] = member is not None
+        result["viewer_request_status"] = latest.status if latest else None
+        result["viewer_request_kind"] = latest.request_kind if latest else None
     return result
+
+
+def request_data(db, row):
+    project = db.get(Project, row.project_id)
+    return data(row) | {"project_is_active": project is not None and project.visibility != "withdrawn"}
+
+
+def cancel_pending_requests(db, project_id, opening_id=None, exclude_id=None):
+    query = select(ProjectRequest).where(ProjectRequest.project_id == project_id,
+                                         ProjectRequest.status == "pending")
+    if opening_id:
+        query = query.where(ProjectRequest.opening_id == opening_id)
+    if exclude_id:
+        query = query.where(ProjectRequest.id != exclude_id)
+    rows = list(db.scalars(query))
+    for row in rows:
+        update_revision(db, row, row.revision, {"status": "cancelled"})
+    return rows
+
+
+def notify_cancelled_requests(db, rows, actor_id, title, href="/projects/requests"):
+    recipients = {row.candidate_id for row in rows}
+    for user_id in sorted(recipients - {actor_id}):
+        notify(db, user_id, "project_request_cancelled", title, href)
 
 
 class ProjectInput(Input):
@@ -80,7 +119,7 @@ def create_project(body: ProjectInput, db: DB, user: Actor):
     db.add(ProjectMember(project_id=row.id, user_id=user.id, role=body.role, contribution=body.contribution,
                          is_public=body.visibility == "public"))
     facts_changed(db, user.id)
-    return data(row)
+    return project_data(db, row, user)
 
 
 @router.get("/projects")
@@ -88,15 +127,15 @@ def projects(db: DB, user: Actor, page: Page, mine: bool = False, q: str = Query
     member_ids = select(ProjectMember.project_id).where(ProjectMember.user_id == user.id)
     query = select(Project).where(Project.visibility != "withdrawn")
     query = query.where(Project.creator_id == user.id) if mine else query.where(
-        (Project.visibility == "public") | (Project.creator_id == user.id) | (Project.id.in_(member_ids)))
+        Project.visibility == "public", ~Project.id.in_(member_ids))
     if q:
         query = query.where(Project.title.icontains(q, autoescape=True))
-    return page.page(db, query, Project, lambda x: project_data(db, x))
+    return page.page(db, query, Project, lambda x: project_data(db, x, user))
 
 
 @router.get("/projects/{project_id}")
 def project_detail(project_id: str, db: DB, user: Actor):
-    return project_data(db, get_project(db, project_id, user))
+    return project_data(db, get_project(db, project_id, user), user)
 
 
 def invalidate_members(db, project_id):
@@ -113,16 +152,26 @@ def edit_project(project_id: str, body: ProjectEdit, db: DB, user: Actor):
     if row.visibility != "public":
         db.execute(update(RecruitmentPost).where(RecruitmentPost.project_id == row.id,
                    RecruitmentPost.status == "published").values(status="draft", revision=RecruitmentPost.revision + 1))
-    return data(row)
+    return project_data(db, row, user)
 
 
 @router.delete("/projects/{project_id}", status_code=204)
 def remove_project(project_id: str, db: DB, user: Actor, revision: int = Query(ge=1)):
     row = get_project(db, project_id, user, True)
+    member_ids = list(db.scalars(select(ProjectMember.user_id).where(ProjectMember.project_id == row.id)))
     invalidate_members(db, project_id)
     update_revision(db, row, revision, {"visibility": "withdrawn"})
     db.execute(update(RecruitmentPost).where(RecruitmentPost.project_id == row.id)
                .values(status="closed", revision=RecruitmentPost.revision + 1))
+    cancelled = cancel_pending_requests(db, row.id)
+    # Existing decision alerts must not lead to a withdrawn project. Request
+    # alerts remain useful because the dashboard shows their cancellation.
+    db.execute(update(Notification).where(Notification.href == f"/projects/{row.id}").values(href="/projects"))
+    affected_users = set(member_ids)
+    for request in cancelled:
+        affected_users.update((request.candidate_id, request.initiator_id, request.recipient_id))
+    for user_id in sorted(affected_users - {user.id}):
+        notify(db, user_id, "project_closed", "프로젝트가 삭제되어 관련 참여 요청이 취소되었어요", "/projects")
 
 
 @router.get("/projects/{project_id}/members")
@@ -222,7 +271,11 @@ def posts(db: DB, user: Actor, page: Page, mine: bool = False):
     if mine:
         query = query.where(Project.creator_id == user.id)
     else:
-        query = query.where(RecruitmentPost.status == "published", Project.visibility == "public")
+        member_projects = select(ProjectMember.project_id).where(ProjectMember.user_id == user.id)
+        has_opening = select(RoleOpening.id).where(RoleOpening.post_id == RecruitmentPost.id,
+                                                   RoleOpening.filled < RoleOpening.capacity).exists()
+        query = query.where(RecruitmentPost.status == "published", Project.visibility == "public",
+                            ~Project.id.in_(member_projects), has_opening)
     return page.page(db, query, RecruitmentPost, lambda x: post_data(db, x))
 
 
@@ -245,9 +298,17 @@ def publish_post(post_id: str, body: PublishInput, db: DB, user: Actor):
     project = get_project(db, post.project_id, user, True)
     lock_user(db, user.id)
     db.refresh(project)
+    if post.status != "draft":
+        raise HTTPException(409, "Only a draft recruitment post can be published.")
     if project.visibility != "public":
         raise HTTPException(409, "프로젝트 공개 범위를 먼저 확인해 주세요.")
+    if not db.scalar(select(RoleOpening.id).where(RoleOpening.post_id == post.id,
+                                                   RoleOpening.filled < RoleOpening.capacity)):
+        raise HTTPException(409, "모집 가능한 역할이 없습니다.")
     update_revision(db, post, body.revision, {"status": "published"})
+    # If this balance check rejects, the surrounding request transaction also
+    # rolls the attempted publication back.
+    consume_opportunity(db, user)
     return post_data(db, post)
 
 
@@ -301,6 +362,9 @@ def create_request(db, user, project, opening_id, candidate_id, kind, message, k
     if db.scalar(select(ProjectRequest).where(ProjectRequest.project_id == project.id,
             ProjectRequest.candidate_id == candidate_id, ProjectRequest.status == "pending")):
         raise HTTPException(409, "이미 응답을 기다리는 참여 요청이 있습니다.")
+    if kind == "application":
+        # Invitations are not a candidate-initiated participation request.
+        consume_opportunity(db, user)
     recipient = project.creator_id if kind == "application" else candidate_id
     row = ProjectRequest(project_id=project.id, opening_id=opening.id, candidate_id=candidate_id,
                          initiator_id=user.id, recipient_id=recipient, request_kind=kind, message=message)
@@ -333,7 +397,8 @@ def invite(project_id: str, body: Invitation, db: DB, user: Actor,
 @router.get("/me/project-requests")
 def requests(db: DB, user: Actor, page: Page):
     return page.page(db, select(ProjectRequest).where((ProjectRequest.initiator_id == user.id) |
-                                                     (ProjectRequest.recipient_id == user.id)), ProjectRequest)
+                                                     (ProjectRequest.recipient_id == user.id)), ProjectRequest,
+                     lambda row: request_data(db, row))
 
 
 @router.post("/project-requests/{request_id}/decision")
@@ -362,6 +427,15 @@ def decide_request(request_id: str, body: Decision, db: DB, user: Actor):
             raise HTTPException(409, "모집 인원이 모두 찼습니다.")
         db.add(ProjectMember(project_id=project.id, user_id=row.candidate_id, role=opening.role))
         facts_changed(db, row.candidate_id)
+        db.refresh(opening)
+        if opening.filled >= opening.capacity:
+            cancelled = cancel_pending_requests(db, project.id, opening_id=opening.id, exclude_id=row.id)
+            notify_cancelled_requests(db, cancelled, user.id, "모집 정원이 차서 참여 요청이 취소되었어요")
+        if not db.scalar(select(RoleOpening.id).where(RoleOpening.post_id == post.id,
+                                                       RoleOpening.filled < RoleOpening.capacity)):
+            db.execute(update(RecruitmentPost).where(RecruitmentPost.id == post.id,
+                       RecruitmentPost.status == "published").values(status="closed",
+                                                                        revision=RecruitmentPost.revision + 1))
     update_revision(db, row, body.revision, {"status": body.decision})
     notify(db, row.initiator_id, "project_decision", "프로젝트 요청에 답변이 도착했어요", f"/projects/{row.project_id}")
     return data(row)

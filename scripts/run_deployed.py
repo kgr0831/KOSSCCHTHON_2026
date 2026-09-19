@@ -48,7 +48,7 @@ def main():
             public_env = {key: value for key, value in env.items() if not key.startswith(("DUDRI_", "SUPABASE_"))
                           and key not in ("DATABASE_URL", "KOSS_AI_API_KEY")}
             public_env["DUDRI_SITE_ORIGIN"] = settings.site_origin
-            children.append(subprocess.Popen(["node", str(ROOT / "frontend/node_modules/next/dist/bin/next"), "start", "--hostname", "0.0.0.0", "--port", str(port)],
+            children.append(subprocess.Popen(["node", str(ROOT / "frontend/scripts/next-server.mjs")],
                                              cwd=ROOT / "frontend", env=public_env, start_new_session=True))
         print(f"[deploy] {role} started; production authentication enabled.", flush=True)
         while all(child.poll() is None for child in children):

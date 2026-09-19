@@ -1,15 +1,15 @@
 import base64
 import hashlib
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, Query
-from sqlalchemy import inspect, select, update
+from sqlalchemy import delete, inspect, select, update
 from sqlalchemy.orm import Session
 
 from .db import get_db
-from .models import IdempotencyRecord, Notification, PersonalSite, Publication, User, now
+from .models import IdempotencyRecord, Notification, PersonalSite, Publication, RealtimeEvent, User, now
 
 # Commit (or fail) before sending a successful response. Otherwise an immediate
 # request after login/save can race the yield dependency's request-scope cleanup.
@@ -69,6 +69,7 @@ def facts_changed(db: Session, user_id: str):
                                                 Publication.revoked_at.is_(None)).values(revoked_at=now()))
         site.published_version_id = None
         site.revision += 1
+    emit_realtime(db, "facts_changed", broadcast=True)
 
 
 class Pagination:
@@ -100,6 +101,23 @@ Page = Annotated[Pagination, Depends()]
 
 def notify(db: Session, user_id: str, kind: str, title: str, href: str):
     db.add(Notification(user_id=user_id, kind=kind, title=title, href=href))
+    emit_realtime(db, "notification", user_ids=[user_id])
+
+
+def emit_realtime(db: Session, kind: str, *, user_ids=(), broadcast=False):
+    """Queue opaque, committed-state invalidations for WebSocket subscribers.
+
+    Events deliberately carry no private record contents.  Clients refetch
+    through their existing authorized API requests, so a target user can never
+    learn another user's notification or preference values through a socket.
+    The table lets connections on separate API instances observe the same
+    change without a new message-broker dependency.
+    """
+    db.execute(delete(RealtimeEvent).where(RealtimeEvent.created_at < now() - timedelta(days=1)))
+    if broadcast:
+        db.add(RealtimeEvent(target_user_id=None, kind=kind))
+    for user_id in sorted(set(user_ids)):
+        db.add(RealtimeEvent(target_user_id=user_id, kind=kind))
 
 
 def idempotent_lookup(db: Session, user_id: str, operation: str, key: str | None, payload: dict):

@@ -1,16 +1,23 @@
 "use client";
 
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import DesignGallery from "@/components/design-gallery";
+import DocumentReferencePicker, { type DocumentKind } from "@/components/document-reference-picker";
 import { useSessionDraft, useUnsavedChanges } from "@/lib/hooks";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "@/components/app-navigation";
 import Link from "next/link";
 import { ArrowDown, ArrowUp, Code2, Download, Eye, FileText, History, Monitor, Plus, Save, Smartphone, Sparkles, X } from "lucide-react";
-import { api, jsonBody, localDate, type UserPublic } from "@/lib/api";
+import { api, jsonBody, localDate, type Subscription, type UserPublic } from "@/lib/api";
 import { kinds, pending, versionStatus, type Code, type Document, type Site, type Style, type Version } from "@/lib/studio";
 import { useAuth } from "@/components/providers";
 import { AuthGate, ErrorMessage, Field, Loading, PageHeading } from "@/components/ui";
+
+type AISettings = {
+  transport: "api" | "cli" | "hybrid";
+  cli_provider: "codex" | "claude";
+  cli_connections: { provider: string; current_pc: boolean; status: string }[];
+};
 
 export default function StudioPage() { return <AuthGate><Suspense fallback={<Loading />}><Studio /></Suspense></AuthGate>; }
 
@@ -20,37 +27,45 @@ function Studio() {
   const kind = kinds[params.get("kind") || ""] ? params.get("kind")! : "portfolio";
   const versionId = params.get("version") || "";
   const [styleId, setStyleId] = useState("linear"), [instruction, setInstruction] = useState(""), [consent, setConsent] = useState(false);
+  const [referenceIds, setReferenceIds] = useState<string[]>([]);
   const [revisionStyle, setRevisionStyle] = useState("");
   const [busy, setBusy] = useState(false), [error, setError] = useState<unknown>();
-  const styles = useQuery({ queryKey: ["portfolio-styles", user?.id], queryFn: () => api<{ items: Style[] }>("/portfolio-styles"), refetchInterval: query => query.state.data?.items.some(style => style.status === "queued" || style.status === "running") ? 2000 : false });
+  const subscription = useQuery({ queryKey: ["subscription"], queryFn: () => api<Subscription>("/me/subscription") });
+  const premium = subscription.data?.plan === "premium";
+  const styles = useQuery({ queryKey: ["portfolio-styles", user?.id], queryFn: () => api<{ items: Style[] }>("/portfolio-styles"), enabled: premium, refetchInterval: query => query.state.data?.items.some(style => style.status === "queued" || style.status === "running") ? 2000 : false });
+  const aiSettings = useQuery({ queryKey: ["ai-settings"], queryFn: () => api<AISettings>("/me/ai-settings"), enabled: premium });
   const sites = useQuery({ queryKey: ["sites"], queryFn: () => api<{ items: Site[] }>("/me/sites"), refetchInterval: q => q.state.data?.items.some(s => s.versions.some(v => pending(v.status))) ? 2000 : false });
   const profile = useQuery({ queryKey: ["studio-public-input", user?.id], queryFn: () => api<UserPublic>(`/users/${user!.id}`), enabled: !!user });
   const version = useQuery({ queryKey: ["site-version", versionId], queryFn: () => api<Version>(`/me/site-versions/${versionId}`), enabled: !!versionId, refetchInterval: q => q.state.data && pending(q.state.data.status) ? 2000 : false });
   const site = sites.data?.items.find(x => x.site_kind === kind);
+  const imageInputsEnabled = Boolean(aiSettings.data && ["cli", "hybrid"].includes(aiSettings.data.transport) && aiSettings.data.cli_provider === "codex" && aiSettings.data.cli_connections.some(connection => connection.provider === "codex" && connection.current_pc && connection.status === "connected"));
   const navigate = (id = "", nextKind = kind) => router.replace(`/studio?kind=${nextKind}${id ? `&version=${id}` : ""}`, { scroll: false });
+  useEffect(() => { setReferenceIds([]); }, [kind]);
   async function generate(base?: Version) {
+    if (!premium) { router.push("/pricing"); return; }
     setBusy(true); setError(null);
     try {
-      const result = await api<Version>(`/me/sites/${kind}/versions`, { method: "POST", body: jsonBody({ style_id: (base && revisionStyle) || base?.style_id || styleId, instruction: instruction || base?.instruction || "", consent, revision: site?.revision || 0, base_version_id: base?.facts_current && base.code?.html ? base.id : null }) });
+      const result = await api<Version>(`/me/sites/${kind}/versions`, { method: "POST", body: jsonBody({ style_id: (base && revisionStyle) || base?.style_id || styleId, instruction: instruction || base?.instruction || "", consent, revision: site?.revision || 0, base_version_id: base?.facts_current && base.code?.html ? base.id : null, reference_ids: referenceIds }) });
       await client.invalidateQueries({ queryKey: ["sites"] }); navigate(result.id);
     } catch (e) { setError(e); } finally { setBusy(false); }
   }
   return <div className="studio-page"><PageHeading eyebrow="MY STORY STUDIO" title="나를 담는 AI 스튜디오" description="디자인을 고르고, 내 경험으로 나만의 이야기를 완성해요. 모든 초안과 수정본은 저장됩니다." action={<Link className="button subtle" href="/settings/ai"><Sparkles size={16} /> AI 연결 설정</Link>} />
-    <div className="tabs studio-kinds" aria-label="문서 종류">{Object.entries(kinds).map(([id, name]) => <button key={id} className={kind === id ? "selected" : ""} aria-pressed={kind === id} onClick={() => navigate("", id)}>{name}</button>)}</div>
+    <div className="tabs studio-kinds" aria-label="문서 종류">{Object.entries(kinds).map(([id, name]) => <button key={id} className={kind === id ? "selected" : ""} aria-pressed={kind === id} onClick={() => { setReferenceIds([]); navigate("", id); }}>{name}</button>)}</div>
     <p className="kind-description">{{ portfolio: "대표 프로젝트와 내가 맡은 역할, 문제 해결 과정, 결과물을 보여주는 웹 포트폴리오를 만들어요.", cv: "경력·학력·기술을 간결하게 정리한 이력서를 만들어요. 인쇄와 PDF 보관에 맞는 문서입니다.", profile_pr: "나의 강점과 경험을 한눈에 소개하는 자기 PR 웹 프로필을 만들어요.", cover_letter: "지원 동기와 실제 경험을 연결한 문단 중심 자기소개서를 만들어요." }[kind]}</p>
+    {subscription.isPending ? <section className="notice info" role="status">AI 생성 권한을 확인하고 있어요.</section> : subscription.isError ? <ErrorMessage error={subscription.error} /> : !premium && <section className="notice info"><strong>Premium 전용 AI 생성</strong> 포트폴리오, CV, 프로필, 자기소개서 생성은 Premium에서 사용할 수 있어요. <Link className="text-link" href="/pricing">요금제 보기</Link></section>}
     <div className="studio-layout"><div className="studio-workspace stack">
       {!versionId ? <>
-        <section className="panel"><div className="section-title"><h2>01. 나에게 어울리는 디자인</h2><span className="badge purple">{styles.data?.items.length || 0}가지 스타일</span></div><p className="muted">같은 예시 프로필로 비교해 보세요. 선택한 디자인 문서를 AI에 함께 전달해요.</p><DesignGallery styles={styles.data?.items || []} selected={styleId} onSelect={setStyleId} /><ErrorMessage error={styles.error} /></section>
-        <section className="panel stack"><h2>02. 어떤 이야기를 만들까요?</h2><Field label="AI에게 전달할 요청" hint="소개할 경험, 지원 분야, 강조할 강점을 알려주세요. 없는 이력을 넣지 않아요."><textarea rows={5} maxLength={15000} value={instruction} onChange={e => setInstruction(e.target.value)} placeholder={kind === "cover_letter" ? "어떤 직무에 지원하나요? 관련 경험과 지원 동기를 적어 주세요." : "누구에게 보여줄 문서인가요? 내 경험 중 강조하고 싶은 내용을 적어 주세요."} /></Field><details><summary>AI에 전달할 공개 프로필 확인</summary>{profile.data ? <div className="input-facts"><strong>{profile.data.display_name}</strong><p data-selectable>{profile.data.bio || "공개된 자기소개가 없습니다."}</p>{profile.data.career_events.map(x => <p key={x.id}>{x.title} · {x.description}</p>)}<p>{profile.data.tags.map(x => x.name).join(" · ")}</p><Link className="text-link" href="/profile">프로필·공개 범위 수정</Link></div> : <Loading />}</details><label className="check-row"><input type="checkbox" checked={consent} onChange={e => setConsent(e.target.checked)} /> 공개 프로필과 작성 요청을 선택한 AI 제공자에게 전송하는 데 동의합니다.</label><button className="button primary" disabled={busy || !consent || !profile.data || !styles.data?.items.length} onClick={() => generate()}><Sparkles size={17} />{busy ? "작업 저장 중…" : `AI로 ${kinds[kind]} 만들기`}</button></section>
+        <section className="panel"><div className="section-title"><h2>01. 나에게 어울리는 디자인</h2><span className="badge purple">{styles.data?.items.length || 0}가지 스타일</span></div><p className="muted">같은 예시 프로필로 비교해 보세요. 선택한 디자인 문서를 AI에 함께 전달해요.</p>{subscription.isPending ? <p className="muted" role="status">요금제를 확인한 뒤 디자인을 불러와요.</p> : subscription.isError ? <ErrorMessage error={subscription.error} /> : !premium ? <p className="notice info">디자인 스타일 생성과 AI 문서 생성은 Premium에서 사용할 수 있어요. <Link className="text-link" href="/pricing">요금제 보기</Link></p> : <><DesignGallery styles={styles.data?.items || []} selected={styleId} onSelect={setStyleId} /><ErrorMessage error={styles.error} /></>}</section>
+        <section className="panel stack"><h2>02. 어떤 이야기를 만들까요?</h2><Field label="AI에게 전달할 요청" hint="소개할 경험, 지원 분야, 강조할 강점을 알려주세요. 없는 이력을 넣지 않아요."><textarea rows={5} maxLength={15000} disabled={!premium || busy} value={instruction} onChange={e => setInstruction(e.target.value)} placeholder={kind === "cover_letter" ? "어떤 직무에 지원하나요? 관련 경험과 지원 동기를 적어 주세요." : "누구에게 보여줄 문서인가요? 내 경험 중 강조하고 싶은 내용을 적어 주세요."} /></Field><details><summary>AI에 전달할 공개 프로필 확인</summary>{profile.data ? <div className="input-facts"><strong>{profile.data.display_name}</strong><p data-selectable>{profile.data.bio || "공개된 자기소개가 없습니다."}</p>{profile.data.career_events.map(x => <p key={x.id}>{x.title} · {x.description}</p>)}<p>{profile.data.tags.map(x => x.name).join(" · ")}</p><Link className="text-link" href="/profile">프로필·공개 범위 수정</Link></div> : <Loading />}</details>{subscription.isSuccess && <DocumentReferencePicker kind={kind as DocumentKind} value={referenceIds} onChange={setReferenceIds} disabled={busy} canUpload={premium} selectionEnabled={premium} imageInputsEnabled={imageInputsEnabled} imageInputsChecking={premium && aiSettings.isPending} />}<label className="check-row"><input type="checkbox" disabled={!premium || busy} checked={consent} onChange={e => setConsent(e.target.checked)} /> 공개 프로필·선택한 참고 파일·작성 요청을 선택한 AI 제공자에게 전송하는 데 동의합니다.</label><button className="button primary" disabled={!premium || busy || !consent || !profile.data || !styles.data?.items.length} onClick={() => generate()}><Sparkles size={17} />{busy ? "작업 저장 중…" : `AI로 ${kinds[kind]} 만들기`}</button></section>
       </> : version.isPending ? <Loading /> : version.data ? <>
         <div className="studio-version-heading"><button className="text-link" onClick={() => navigate()}>← 디자인 선택으로</button><span className="badge purple">버전 {version.data.version_number} · {versionStatus[version.data.status]}</span></div>
-        {pending(version.data.status) ? <section className="panel generation-state"><Sparkles className="spin" size={36} /><h2>나만의 이야기를 만드는 중이에요</h2><p>화면을 닫아도 작업 기록은 유지돼요.<br />마이 → AI 스튜디오에서 이어서 확인할 수 있어요.</p><span className="muted">Claude · 선택한 디자인과 공개 프로필 반영</span></section> : <>
+        {pending(version.data.status) ? <section className="panel generation-state"><Sparkles className="spin" size={36} /><h2>나만의 이야기를 만드는 중이에요</h2><p>화면을 닫아도 작업 기록은 유지돼요.<br />마이 → AI 스튜디오에서 이어서 확인할 수 있어요.</p><span className="muted">선택한 AI 제공자 · 디자인·공개 프로필·선택 참고 파일 반영</span></section> : <>
           {version.data.error && <p className="notice error" role="alert">{version.data.error}</p>}
           {version.data.code?.html && <Editor key={`${version.data.id}:${version.data.status}`} version={version.data} site={site} kind={kind} onSaved={id => navigate(id)} />}
-          <section className="panel stack"><h2>{version.data.code?.html ? "AI에게 수정 요청" : "저장된 입력으로 다시 만들기"}</h2><Field label="수정본에 적용할 디자인"><select value={revisionStyle || version.data.style_id} onChange={e => setRevisionStyle(e.target.value)}>{styles.data?.items.map(style => <option key={style.id} value={style.id}>{style.name}</option>)}</select></Field><Field label="변경할 내용"><textarea value={instruction} onChange={e => setInstruction(e.target.value)} rows={3} placeholder={version.data.instruction || "예: 소개를 간결하게 하고 프로젝트를 먼저 보여주세요."} /></Field><label className="check-row"><input type="checkbox" checked={consent} onChange={e => setConsent(e.target.checked)} /> 공개 프로필·선택 버전·작성 요청의 AI 전송에 동의합니다.</label><button className="button subtle" disabled={busy || !consent} onClick={() => generate(version.data)}><Sparkles size={16} />새 버전 생성</button></section>
+          <section className="panel stack"><h2>{version.data.code?.html ? "AI에게 수정 요청" : "저장된 입력으로 다시 만들기"}</h2><Field label="수정본에 적용할 디자인"><select disabled={!premium || busy} value={revisionStyle || version.data.style_id} onChange={e => setRevisionStyle(e.target.value)}>{styles.data?.items.map(style => <option key={style.id} value={style.id}>{style.name}</option>)}</select></Field><Field label="변경할 내용"><textarea disabled={!premium || busy} value={instruction} onChange={e => setInstruction(e.target.value)} rows={3} placeholder={version.data.instruction || "예: 소개를 간결하게 하고 프로젝트를 먼저 보여주세요."} /></Field>{subscription.isSuccess && <DocumentReferencePicker kind={kind as DocumentKind} value={referenceIds} onChange={setReferenceIds} disabled={busy} canUpload={premium} selectionEnabled={premium} imageInputsEnabled={imageInputsEnabled} imageInputsChecking={premium && aiSettings.isPending} />}<label className="check-row"><input type="checkbox" disabled={!premium || busy} checked={consent} onChange={e => setConsent(e.target.checked)} /> 공개 프로필·선택한 참고 파일·선택 버전·작성 요청을 AI 제공자에게 전송하는 데 동의합니다.</label><button className="button subtle" disabled={!premium || busy || !consent} onClick={() => generate(version.data)}><Sparkles size={16} />새 버전 생성</button></section>
         </>}
       </> : null}<ErrorMessage error={error || version.error || sites.error} />
-    </div><aside className="studio-history panel"><div className="section-title"><h2><History size={18} /> 저장된 이야기</h2><button className="icon-button" aria-label="새 문서 만들기" onClick={() => navigate()}><Plus size={18} /></button></div><p className="muted">{kinds[kind]} · {site?.versions.length || 0}개 버전</p>{site?.public_url && <a href={site.public_url} target="_blank" rel="noreferrer" className="button subtle wide">게시된 문서 열기 ↗</a>}{site?.versions.map(v => <button key={v.id} className={`history-item ${v.id === versionId ? "selected" : ""}`} onClick={() => navigate(v.id)}><FileText size={18} /><span><strong>버전 {v.version_number} {site.published_version_id === v.id && "· 게시 중"}</strong><small>{versionStatus[v.status]} · {localDate(v.created_at)}</small></span></button>)}{!site?.versions.length && <p className="history-empty">첫 문서를 만들어 보세요.<br />이전 버전도 언제든 다시 열 수 있어요.</p>}<div className="gentle-note"><Save size={18} /><p>저장된 내용은 DB에 보관돼요. 공개 정보가 바뀌면 기존 게시는 자동으로 중지돼요.</p></div></aside></div>
+    </div><aside className="studio-history panel"><div className="section-title"><h2><History size={18} /> 저장된 이야기</h2><button className="icon-button" aria-label="새 문서 만들기" onClick={() => navigate()}><Plus size={18} /></button></div><p className="muted">{kinds[kind]} · {site?.versions.length || 0}개 버전</p>{site?.public_url && user && <Link href={`/users/${user.id}?site=${encodeURIComponent(site.site_kind)}`} className="button subtle wide">게시된 문서 열기 ↗</Link>}{site?.versions.map(v => <button key={v.id} className={`history-item ${v.id === versionId ? "selected" : ""}`} onClick={() => navigate(v.id)}><FileText size={18} /><span><strong>버전 {v.version_number} {site.published_version_id === v.id && "· 게시 중"}</strong><small>{versionStatus[v.status]} · {localDate(v.created_at)}</small></span></button>)}{!site?.versions.length && <p className="history-empty">첫 문서를 만들어 보세요.<br />이전 버전도 언제든 다시 열 수 있어요.</p>}<div className="gentle-note"><Save size={18} /><p>저장된 내용은 DB에 보관돼요. 공개 정보가 바뀌면 기존 게시는 자동으로 중지돼요.</p></div></aside></div>
 
   </div>;
 }

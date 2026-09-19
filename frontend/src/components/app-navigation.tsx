@@ -11,6 +11,7 @@ const screens = {
   "/profile": lazy(() => import("@/app/profile/page")),
   "/studio": lazy(() => import("@/app/studio/page")),
   "/materials": lazy(() => import("@/app/materials/page")),
+  "/pricing": lazy(() => import("@/app/pricing/page")),
   "/career": lazy(() => import("@/app/career/page")),
   "/settings/ai": lazy(() => import("@/app/settings/ai/page")),
   "/notifications": lazy(() => import("@/app/notifications/page")),
@@ -24,7 +25,9 @@ const screens = {
   "/projects/:id": lazy(() => import("@/app/projects/[id]/page")),
   "/auth/callback": lazy(() => import("@/app/auth/callback/page")),
   "/auth/confirm": lazy(() => import("@/app/auth/confirm/page")),
+  "/github/callback": lazy(() => import("@/app/github/callback/page")),
 };
+const sensitiveCallbackPaths = new Set(["/auth/confirm", "/auth/callback", "/github/callback"]);
 function screenKey(path: string) { return path in screens ? path as keyof typeof screens : path.replace(/\/(users|coffee|bookings|projects)\/[^/]+$/, "/$1/:id") as keyof typeof screens; }
 function normalize(href: string) {
   const url = new URL(href, window.location.origin);
@@ -33,7 +36,7 @@ function normalize(href: string) {
   if (url.pathname === "/auth") return "/auth";
   if (!screens[screenKey(url.pathname)]) return null;
   // Authentication fragments must never be persisted to app history or storage.
-  if (url.pathname === "/auth/confirm" || url.pathname === "/auth/callback") return url.pathname;
+  if (sensitiveCallbackPaths.has(url.pathname)) return url.pathname;
   return url.pathname + url.search + url.hash;
 }
 type Options = { scroll?: boolean };
@@ -58,7 +61,7 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
   useEffect(() => {
     if (!initialized.current) {
       initialized.current = true;
-      const confirm = ["/auth/confirm", "/auth/callback"].includes(window.location.pathname);
+      const confirm = sensitiveCallbackPaths.has(window.location.pathname);
       const initial = normalize(window.history.state?.dudriView || window.location.href) || "/";
       setRoute(initial === "/auth" ? "/" : initial); setAuthOpen(initial === "/auth"); setReady(true);
       if (!confirm) window.history.replaceState({ ...window.history.state, dudriView: initial === "/auth" ? "/" : initial }, "", "/");
@@ -75,7 +78,7 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
     const next = normalize(href);
     if (!next) return;
     if (next === "/auth") {
-      try { sessionStorage.setItem("dudri.authReturn", ["/auth/confirm", "/auth/callback"].includes(route) ? "/profile" : route); } catch {}
+      try { sessionStorage.setItem("dudri.authReturn", sensitiveCallbackPaths.has(route) ? "/profile" : route); } catch {}
       setAuthOpen(true); return;
     }
     if (next === route) return;
@@ -90,10 +93,10 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
   const closeAuth = useCallback(() => setAuthOpen(false), []);
   const finishLogin = useCallback(() => {
     setAuthOpen(false);
-    if (["/auth/confirm", "/auth/callback"].includes(route)) {
+    if (sensitiveCallbackPaths.has(route)) {
       let destination = "/profile";
       try { destination = normalize(sessionStorage.getItem("dudri.authReturn") || "/profile") || "/profile"; sessionStorage.removeItem("dudri.authReturn"); } catch {}
-      replace(["/auth/confirm", "/auth/callback", "/auth"].includes(destination) ? "/profile" : destination);
+      replace(sensitiveCallbackPaths.has(destination) || destination === "/auth" ? "/profile" : destination);
     }
   }, [route, replace]);
   useEffect(() => {
@@ -111,7 +114,7 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
     const anchor = (event.target as Element).closest<HTMLAnchorElement>("a[href]");
     if (!anchor || anchor.target || anchor.hasAttribute("download")) return;
     if (anchor.getAttribute("href")?.startsWith("#")) { event.preventDefault(); push(route.split("#")[0] + anchor.getAttribute("href")); return; }
-    if (["/auth/confirm", "/auth/callback"].includes(new URL(anchor.href).pathname)) return;
+    if (sensitiveCallbackPaths.has(new URL(anchor.href).pathname)) return;
     if (normalize(anchor.href)) { event.preventDefault(); push(anchor.href); }
   }}>{children}</div></Context.Provider>;
 }

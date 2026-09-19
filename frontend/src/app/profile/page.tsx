@@ -5,19 +5,54 @@ import { PreferencesForm } from "@/components/preferences-form";
 import { GoogleSignIn } from "@/components/google-sign-in";
 import { SchoolVerification } from "@/components/school-verification";
 import AIDraft from "@/components/ai-draft";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Eye, EyeOff, Plus, Trash2 } from "lucide-react";
 import { useAuth } from "@/components/providers";
+import { Avatar } from "@/components/avatar";
 import { AuthGate, Badge, Empty, ErrorMessage, Field, PageHeading, Submit, Toggle } from "@/components/ui";
-import { api, type Career, type Page, type Profile, type UserTag } from "@/lib/api";
+import { api, type Career, type Page, type Profile, type UserSelf, type UserTag } from "@/lib/api";
 import { useCommand, useSessionDraft, useUnsavedChanges } from "@/lib/hooks";
 
 function ProfileForm({ profile }: { profile: Profile }) {
   const [draft, setForm] = useSessionDraft<Profile>(`profile-${profile.user_id}`);
   const form = draft || profile;
   const command = useCommand();
+  const client = useQueryClient();
+  const [avatarBusy, setAvatarBusy] = useState(false);
+  const [avatarError, setAvatarError] = useState<unknown>();
+  const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
+  const syncProfile = (next: Profile) => {
+    client.setQueryData<UserSelf>(["me"], current => current ? { ...current, profile: next } : current);
+    void client.invalidateQueries({ queryKey: ["me"] });
+  };
+  const uploadAvatar = async (file: File) => {
+    if (!["image/png", "image/jpeg", "image/gif", "image/webp"].includes(file.type) || file.size > 2 * 1024 * 1024) {
+      setAvatarError(new Error("PNG, JPEG, GIF 또는 WebP 이미지(최대 2MB)를 선택해 주세요."));
+      return;
+    }
+    const preview = URL.createObjectURL(file);
+    if (avatarPreview) URL.revokeObjectURL(avatarPreview);
+    setAvatarPreview(preview); setAvatarBusy(true); setAvatarError(null);
+    try {
+      const data = new FormData(); data.append("file", file);
+      const next = await api<Profile>("/me/avatar", { method: "POST", body: data });
+      setForm({ ...form, avatar_url: next.avatar_url, revision: next.revision });
+      syncProfile(next);
+      URL.revokeObjectURL(preview); setAvatarPreview(null);
+    } catch (error) {
+      URL.revokeObjectURL(preview); setAvatarPreview(null); setAvatarError(error);
+    } finally { setAvatarBusy(false); }
+  };
+  const removeAvatar = async () => {
+    setAvatarBusy(true); setAvatarError(null);
+    try {
+      await api(`/me/avatar?revision=${encodeURIComponent(form.revision)}`, { method: "DELETE" });
+      const next = { ...form, avatar_url: null, revision: form.revision + 1 };
+      setForm(next); syncProfile(next);
+    } catch (error) { setAvatarError(error); } finally { setAvatarBusy(false); }
+  };
   useUnsavedChanges(JSON.stringify(profile) !== JSON.stringify(form));
-  return <section className="panel" id="introduction"><h2>나를 소개해요</h2><form className="stack" onSubmit={e => { e.preventDefault(); const { user_id: _, ...body } = form; command.mutate({ path: "/me", body, method: "PATCH" }, { onSuccess: () => setForm(null) }); }}><Field label="이름"><input required maxLength={100} value={form.display_name} onChange={e => setForm({ ...form, display_name: e.target.value })} /></Field><Toggle label="이름 공개" checked={form.name_is_public} onChange={v => setForm({ ...form, name_is_public: v })} /><Field label="자기소개"><textarea value={form.bio} maxLength={5000} placeholder="지금 관심 있는 분야와 나누고 싶은 이야기를 적어보세요." onChange={e => setForm({ ...form, bio: e.target.value })} /></Field><AIDraft kind="profile" text={form.bio} onApply={draft => setForm({ ...form, bio: draft.text })} /><Toggle label="자기소개 공개" checked={form.bio_is_public} onChange={v => setForm({ ...form, bio_is_public: v })} /><Field label="프로필 이미지 URL"><input type="url" value={form.avatar_url || ""} placeholder="https://…" onChange={e => setForm({ ...form, avatar_url: e.target.value || null })} /></Field><Toggle label="프로필 이미지 공개" checked={form.avatar_is_public} onChange={v => setForm({ ...form, avatar_is_public: v })} /><ErrorMessage error={command.error} /><div className="form-actions">{command.isSuccess && <Badge><Check size={12} /> 저장했어요</Badge>}<Submit pending={command.isPending}>프로필 저장</Submit></div></form></section>;
+  return <section className="panel" id="introduction"><h2>나를 소개해요</h2><form className="stack" onSubmit={e => { e.preventDefault(); const { user_id: _, avatar_url: __, ...body } = form; command.mutate({ path: "/me", body, method: "PATCH" }, { onSuccess: () => setForm(null) }); }}><Field label="이름"><input required maxLength={100} value={form.display_name} onChange={e => setForm({ ...form, display_name: e.target.value })} /></Field><Toggle label="이름 공개" checked={form.name_is_public} onChange={v => setForm({ ...form, name_is_public: v })} /><Field label="자기소개"><textarea value={form.bio} maxLength={5000} placeholder="지금 관심 있는 분야와 나누고 싶은 이야기를 적어보세요." onChange={e => setForm({ ...form, bio: e.target.value })} /></Field><AIDraft kind="profile" text={form.bio} onApply={draft => setForm({ ...form, bio: draft.text })} /><Toggle label="자기소개 공개" checked={form.bio_is_public} onChange={v => setForm({ ...form, bio_is_public: v })} /><Field label="프로필 이미지" hint="PNG, JPEG, GIF 또는 WebP · 최대 2MB. 파일을 고르면 바로 저장됩니다."><div className="inline"><Avatar className="avatar" src={avatarPreview || form.avatar_url} name={form.display_name} privateAccess={!avatarPreview} /><input aria-label="프로필 이미지 파일" type="file" accept="image/png,image/jpeg,image/gif,image/webp" disabled={avatarBusy} onChange={event => { const file = event.target.files?.[0]; event.currentTarget.value = ""; if (file) void uploadAvatar(file); }} />{form.avatar_url && <button className="button subtle" type="button" disabled={avatarBusy} onClick={() => void removeAvatar()}><Trash2 size={15} />이미지 제거</button>}</div>{avatarBusy && <p className="muted" role="status">프로필 이미지를 저장하는 중…</p>}</Field><Toggle label="프로필 이미지 공개" checked={form.avatar_is_public} onChange={v => setForm({ ...form, avatar_is_public: v })} /><ErrorMessage error={avatarError || command.error} /><div className="form-actions">{command.isSuccess && <Badge><Check size={12} /> 저장했어요</Badge>}<Submit pending={command.isPending}>프로필 저장</Submit></div></form></section>;
 }
 
 

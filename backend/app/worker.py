@@ -10,12 +10,14 @@ from .ai import provider_for
 from .common import lock_user
 from .config import get_settings
 from .db import session_factory
+from .document_references import version_reference_inputs
 from .job_lease import locked_lease
 from .local_runtime import execution_target
 from .models import Job, PersonalSite, SiteVersion, now
 from .site_prompts import site_prompt
 from .site_render import safe_markup, update_fields, validate_code
 from .sites import Generated
+from .subscriptions import can_generate_ai_documents
 
 
 def process_one(factory=None):
@@ -53,14 +55,22 @@ def process_one(factory=None):
             user = lock_user(db, user_id)
             version = db.get(SiteVersion, target_id)
             site = db.get(PersonalSite, version.site_id)
+            if not can_generate_ai_documents(user):
+                raise HTTPException(403, "AI document generation requires a PREMIUM plan.")
             if version.facts_revision != user.facts_revision or user.account_status != "active":
                 raise HTTPException(409, "프로필이 변경되어 생성을 중단했어요. 최신 정보로 다시 생성해 주세요.")
             version.status = "running"
             ai = provider_for(db, user_id)
+            reference_materials, reference_images = version_reference_inputs(db, version.id, user.id, site.site_kind)
+            if reference_images and not ai.supports_image_inputs("hard"):
+                raise HTTPException(422, "PNG/JPG 참고 자료는 이 PC의 Codex CLI 연결에서만 사용할 수 있어요.")
             base = db.get(SiteVersion, version.base_version_id) if version.base_version_id else None
             inputs = {**version.public_input_snapshot, "kind": site.site_kind, "request": version.instruction,
-                      "previous_code": base.code if base else None}
-        result = ai.generate(site_prompt(inputs["kind"]), inputs, Generated, complexity="hard")
+                      "previous_code": base.code if base else None, "reference_materials": reference_materials,
+                      "reference_images": [{"name": item["name"], "content_type": item["content_type"]}
+                                           for item in reference_images]}
+        result = ai.generate(site_prompt(inputs["kind"]), inputs, Generated, complexity="hard",
+                             image_attachments=reference_images)
         gui = result.document.model_dump()
         code = update_fields(result.code.model_dump(), gui, preserve_layout=True)
         code["html"] = safe_markup(code["html"])
@@ -72,6 +82,11 @@ def process_one(factory=None):
             user = lock_user(db, user_id)
             version = db.get(SiteVersion, target_id)
             site = db.get(PersonalSite, version.site_id)
+            if not can_generate_ai_documents(user):
+                raise HTTPException(403, "AI document generation requires a PREMIUM plan.")
+            # A reference may be withdrawn while the external CLI/API is
+            # running.  Never persist a result created from a revoked input.
+            version_reference_inputs(db, version.id, user.id, site.site_kind)
             stale = version.facts_revision != user.facts_revision or user.account_status != "active"
             conflict = version.validation.get("base_site_revision") != site.revision
             version.code, version.gui = code, gui

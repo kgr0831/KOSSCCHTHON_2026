@@ -15,6 +15,7 @@ from .auth import Actor, Input
 from .common import DB, data, facts_changed, lock_user, owner, required, update_revision
 from .job_lease import locked_lease
 from .models import AnalysisInput, AnalysisRun, CareerEvent, Job, Material, Profile, Suggestion
+from .subscriptions import AIPlanUser, can_generate_ai_documents
 
 router = APIRouter(prefix="/api/v1")
 
@@ -87,8 +88,10 @@ class Analyze(Input):
 
 
 @router.post("/me/analysis-runs", status_code=202)
-def analyze(body: Analyze, db: DB, user: Actor):
-    lock_user(db, user.id)
+def analyze(body: Analyze, db: DB, user: AIPlanUser):
+    user = lock_user(db, user.id)
+    if not can_generate_ai_documents(user):
+        raise HTTPException(403, "AI document generation requires a PREMIUM plan.")
     materials = [owner(required(db, Material, x), user) for x in set(body.material_ids)]
     if any(x.access_status != "available" or not x.text_content or x.material_kind == "design_md" for x in materials):
         raise HTTPException(409, "사용 가능한 자료를 다시 선택해 주세요.")
@@ -141,6 +144,8 @@ def perform_analysis(factory, job_id, token):
         user = lock_user(db, run.user_id)
         if user.account_status != "active":
             raise HTTPException(403, "계정이 비활성 상태입니다.")
+        if not can_generate_ai_documents(user):
+            raise HTTPException(403, "AI profile generation requires a PREMIUM plan.")
         inputs = checked_inputs(db, run)
         run.status = "running"
         profile_revision = db.get(Profile, run.user_id).revision
@@ -152,7 +157,9 @@ def perform_analysis(factory, job_id, token):
         if not job:
             return
         run = db.get(AnalysisRun, job.target_id)
-        lock_user(db, run.user_id)
+        user = lock_user(db, run.user_id)
+        if not can_generate_ai_documents(user):
+            raise HTTPException(403, "AI profile generation requires a PREMIUM plan.")
         inputs = {x["material_id"]: x["text"] for x in checked_inputs(db, run)}
         for suggestion in result.suggestions:
             if suggestion.material_id not in inputs or suggestion.quote not in inputs[suggestion.material_id]:

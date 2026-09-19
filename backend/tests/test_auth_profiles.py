@@ -1,8 +1,10 @@
+import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
 from sqlalchemy import select
 
-from app.models import AuthSession, PersonalSite, Tag
+from app.models import AuthSession, PersonalSite, ProfileAvatar, Tag
+from app.profiles import MAX_AVATAR_REQUEST_BYTES
 
 
 def test_school_domain_and_single_use_auth(world):
@@ -63,6 +65,70 @@ def test_concurrent_profile_edits_one_wins(world):
         return c.patch("/api/v1/me", headers=headers, json={"revision": 1, "display_name": name}).status_code
     with ThreadPoolExecutor(max_workers=2) as pool:
         assert sorted(pool.map(edit, ["모바일", "PC"])) == [200, 409]
+
+
+def test_profile_avatar_upload_is_durable_and_respects_visibility(world):
+    c, owner, other = world["client"], world["auth"](0), world["auth"](1)
+    png = b"\x89PNG\r\n\x1a\n" + b"profile-image"
+    uploaded = c.post("/api/v1/me/avatar", headers=owner,
+                      files={"file": ("avatar.png", png, "image/png")})
+    assert uploaded.status_code == 200
+    profile = uploaded.json()
+    image_path = profile["avatar_url"]
+    assert image_path.startswith(f"/api/v1/users/{world['users'][0]}/avatar?v=")
+    assert c.get(image_path).content == png
+    assert c.get(image_path, headers=other).headers["content-type"] == "image/png"
+    with world["factory"]() as db:
+        assert db.get(ProfileAvatar, world["users"][0]).content == png
+
+    hidden = c.patch("/api/v1/me", headers=owner,
+                     json={"revision": profile["revision"], "avatar_is_public": False})
+    assert hidden.status_code == 200
+    assert c.get(image_path).status_code == 404
+    assert c.get(image_path, headers=other).status_code == 404
+    assert c.get(image_path, headers=owner).content == png
+
+
+def test_profile_avatar_rejects_non_image_uploads(world):
+    response = world["client"].post("/api/v1/me/avatar", headers=world["auth"](0),
+                                     files={"file": ("avatar.svg", b"<svg></svg>", "image/svg+xml")})
+    assert response.status_code == 422
+
+
+def test_avatar_request_limit_rejects_large_and_chunked_bodies_before_parsing(world):
+    response = world["client"].post(
+        "/api/v1/me/avatar",
+        headers=world["auth"](0),
+        files={"file": ("too-large.png", b"x" * MAX_AVATAR_REQUEST_BYTES, "image/png")},
+    )
+    assert response.status_code == 413
+    with world["factory"]() as db:
+        assert db.get(ProfileAvatar, world["users"][0]) is None
+
+    from app.main import UploadBodySizeMiddleware
+
+    completed, sent = [], []
+
+    async def downstream(scope, receive, send):
+        while (await receive())["more_body"]:
+            pass
+        completed.append(True)
+
+    messages = iter([
+        {"type": "http.request", "body": b"a" * 8, "more_body": True},
+        {"type": "http.request", "body": b"b" * 8, "more_body": False},
+    ])
+
+    async def receive():
+        return next(messages)
+
+    async def send(message):
+        sent.append(message)
+
+    asyncio.run(UploadBodySizeMiddleware(downstream, limits={"/api/v1/me/avatar": (12, "too large")})(
+        {"type": "http", "method": "POST", "path": "/api/v1/me/avatar", "headers": []}, receive, send))
+    assert not completed
+    assert sent[0]["status"] == 413
 
 
 def test_career_owner_and_public_graph(world):

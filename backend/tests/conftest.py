@@ -42,7 +42,10 @@ def world(tmp_path):
         db.add(UniversityDomain(university_id=university.id, domain="university.example"))
         users = []
         for index in range(3):
-            user = User(login_email=f"person{index}@university.example")
+            # Most legacy feature tests exercise paid AI document flows. Keep
+            # their fixture users entitled while dedicated subscription tests
+            # cover the product default and Free restriction.
+            user = User(login_email=f"person{index}@university.example", subscription_plan="premium")
             db.add(user)
             db.flush()
             db.add_all([Profile(user_id=user.id, display_name=f"동문 {index}"),

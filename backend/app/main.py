@@ -14,19 +14,94 @@ from . import (
     coffee,
     design_upload,
     dev,
+    document_references,
+    external_accounts,
     materials,
     profiles,
     projects,
+    realtime,
+    rewards,
     search,
     sites,
+    subscriptions,
     supabase_auth,
 )
 from .common import DB
 
 
+class _UploadBodyTooLarge(Exception):
+    pass
+
+
+class UploadBodySizeMiddleware:
+    """Reject selected oversized multipart bodies before Starlette spools them.
+
+    A Content-Length check handles ordinary browser uploads immediately; the
+    wrapped receive function also covers chunked requests, which otherwise
+    bypass a header-only limit.
+    """
+
+    def __init__(self, app, limits: dict[str, tuple[int, str]]):
+        self.app = app
+        self.limits = limits
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope["method"] != "POST":
+            await self.app(scope, receive, send)
+            return
+        limit = self.limits.get(scope["path"])
+        if not limit:
+            await self.app(scope, receive, send)
+            return
+        max_bytes, message = limit
+        headers = dict(scope.get("headers", ()))
+        try:
+            content_length = int(headers.get(b"content-length", b"0"))
+        except ValueError:
+            content_length = 0
+        if content_length > max_bytes:
+            await JSONResponse(status_code=413, content={"detail": message})(scope, receive, send)
+            return
+        received = 0
+        response_started = False
+
+        async def limited_receive():
+            nonlocal received
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > max_bytes:
+                    raise _UploadBodyTooLarge
+            return message
+
+        async def tracked_send(message):
+            nonlocal response_started
+            if message["type"] == "http.response.start":
+                response_started = True
+            await send(message)
+
+        try:
+            await self.app(scope, limited_receive, tracked_send)
+        except _UploadBodyTooLarge:
+            # Parsing happens before a route can begin a response, but retain
+            # this guard if a future endpoint changes that ordering.
+            if not response_started:
+                await JSONResponse(status_code=413, content={"detail": message})(scope, receive, send)
+
+
 def create_app():
     application = FastAPI(title="두드리 API", version="0.1.0")
-    for module in (auth, supabase_auth, profiles, coffee, projects, search, dev, ai_routes, sites, materials, career, design_upload):
+    reference_paths = {f"/api/v1/me/document-references/{kind}": (
+        document_references.MAX_REFERENCE_REQUEST_BYTES,
+        "참고 파일은 파일당 10MB까지 업로드할 수 있습니다.",
+    ) for kind in ("portfolio", "profile_pr", "cv", "cover_letter")}
+    application.add_middleware(UploadBodySizeMiddleware, limits={
+        "/api/v1/me/avatar": (profiles.MAX_AVATAR_REQUEST_BYTES, "프로필 이미지는 최대 2MB까지 업로드할 수 있습니다."),
+        **reference_paths,
+    })
+    for module in (auth, supabase_auth, profiles, subscriptions, rewards, coffee, projects, realtime, search, dev, ai_routes, sites, materials,
+                   document_references,
+                   external_accounts, career, design_upload):
         application.include_router(module.router)
 
     @application.get("/")

@@ -3,7 +3,19 @@ from datetime import timedelta
 
 from sqlalchemy import select
 
-from app.models import Attendance, Booking, CoffeeSlot, ProjectMember, RoleOpening, now
+from app.models import (
+    Attendance,
+    Booking,
+    CoffeeSlot,
+    Notification,
+    Project,
+    ProjectMember,
+    ProjectRequest,
+    RecruitmentPost,
+    RoleOpening,
+    User,
+    now,
+)
 
 
 def coffee_request(world):
@@ -103,14 +115,14 @@ def test_later_attendance_claim_does_not_create_checkin_or_auto_resolve_dispute(
         assert len(list(db.scalars(select(Attendance)))) == 2
 
 
-def project_and_post(world):
+def project_and_post(world, capacity=1):
     c, a = world["client"], world["auth"](0)
     project = c.post("/api/v1/projects", headers=a, json={"title": "함께 만드는 첫 앱", "role": "기획",
                                                                "visibility": "public"})
     assert project.status_code == 201
     project = project.json()
     post = c.post(f"/api/v1/projects/{project['id']}/recruitment-posts", headers=a,
-                  json={"description": "함께 배울 동료를 찾아요", "role_openings": [{"role": "개발", "capacity": 1}]})
+                  json={"description": "함께 배울 동료를 찾아요", "role_openings": [{"role": "개발", "capacity": capacity}]})
     assert post.status_code == 201
     return project, post.json()
 
@@ -150,3 +162,78 @@ def test_concurrent_applicants_cannot_exceed_capacity(world):
         assert sorted(pool.map(accept, requests)) == [200, 409]
     with world["factory"]() as db:
         assert db.get(RoleOpening, post["role_openings"][0]["id"]).filled == 1
+
+
+def test_member_state_hides_recruitment_and_full_posts_stop_accepting_applications(world):
+    project, post = project_and_post(world)
+    client, creator, applicant, other = world["client"], world["auth"](0), world["auth"](1), world["auth"](2)
+    opening_id = post["role_openings"][0]["id"]
+    assert client.post(f"/api/v1/recruitment-posts/{post['id']}/publish", headers=creator,
+                       json={"revision": post["revision"]}).status_code == 200
+
+    application = client.post(f"/api/v1/recruitment-posts/{post['id']}/applications",
+                              headers=applicant | {"Idempotency-Key": "member-state"},
+                              json={"opening_id": opening_id, "message": "참여하고 싶어요"})
+    assert application.status_code == 201
+    pending = client.get(f"/api/v1/projects/{project['id']}", headers=applicant).json()
+    assert pending["viewer_is_member"] is False
+    assert pending["viewer_request_status"] == "pending"
+
+    decision = client.post(f"/api/v1/project-requests/{application.json()['id']}/decision", headers=creator,
+                           json={"decision": "accepted", "revision": 1})
+    assert decision.status_code == 200
+    participating = client.get(f"/api/v1/projects/{project['id']}", headers=applicant).json()
+    assert participating["viewer_is_member"] is True
+    assert participating["viewer_request_status"] == "accepted"
+
+    assert client.post(f"/api/v1/recruitment-posts/{post['id']}/applications",
+                       headers=applicant | {"Idempotency-Key": "member-retry"},
+                       json={"opening_id": opening_id, "message": "다시 신청할게요"}).status_code == 409
+    assert client.post(f"/api/v1/recruitment-posts/{post['id']}/applications",
+                       headers=other | {"Idempotency-Key": "full-retry"},
+                       json={"opening_id": opening_id, "message": "아직 자리가 있나요"}).status_code == 409
+    assert client.get("/api/v1/recruitment-posts", headers=applicant).json()["items"] == []
+    assert client.get("/api/v1/recruitment-posts", headers=other).json()["items"] == []
+    assert client.get("/api/v1/projects", headers=applicant).json()["items"] == []
+    with world["factory"]() as db:
+        assert db.get(RoleOpening, opening_id).filled == 1
+        assert db.get(RecruitmentPost, post["id"]).status == "closed"
+
+
+def test_only_creator_can_soft_delete_project_and_pending_requests_are_cancelled(world):
+    project, post = project_and_post(world, capacity=2)
+    client, creator, member, applicant = world["client"], world["auth"](0), world["auth"](1), world["auth"](2)
+    opening_id = post["role_openings"][0]["id"]
+    assert client.post(f"/api/v1/recruitment-posts/{post['id']}/publish", headers=creator,
+                       json={"revision": post["revision"]}).status_code == 200
+    accepted = client.post(f"/api/v1/recruitment-posts/{post['id']}/applications",
+                           headers=member | {"Idempotency-Key": "member-apply"},
+                           json={"opening_id": opening_id, "message": "팀원이 될게요"})
+    assert accepted.status_code == 201
+    assert client.post(f"/api/v1/project-requests/{accepted.json()['id']}/decision", headers=creator,
+                       json={"decision": "accepted", "revision": 1}).status_code == 200
+    pending = client.post(f"/api/v1/recruitment-posts/{post['id']}/applications",
+                          headers=applicant | {"Idempotency-Key": "delete-pending"},
+                          json={"opening_id": opening_id, "message": "저도 참여할래요"})
+    assert pending.status_code == 201
+    with world["factory"]() as db:
+        member_facts_before = db.get(User, world["users"][1]).facts_revision
+
+    assert client.delete(f"/api/v1/projects/{project['id']}?revision={project['revision']}", headers=member).status_code == 403
+    assert client.delete(f"/api/v1/projects/{project['id']}?revision={project['revision']}", headers=creator).status_code == 204
+    assert client.get(f"/api/v1/projects/{project['id']}", headers=member).status_code == 404
+    assert client.get(f"/api/v1/recruitment-posts/{post['id']}", headers=applicant).status_code == 404
+    assert client.get("/api/v1/recruitment-posts", headers=applicant).json()["items"] == []
+
+    request_rows = client.get("/api/v1/me/project-requests", headers=applicant).json()["items"]
+    cancelled = next(row for row in request_rows if row["id"] == pending.json()["id"])
+    assert cancelled["status"] == "cancelled"
+    assert cancelled["project_is_active"] is False
+    with world["factory"]() as db:
+        assert db.get(Project, project["id"]).visibility == "withdrawn"
+        assert db.get(RecruitmentPost, post["id"]).status == "closed"
+        assert db.get(ProjectRequest, pending.json()["id"]).status == "cancelled"
+        assert len(list(db.scalars(select(ProjectMember).where(ProjectMember.project_id == project["id"])))) == 2
+        assert db.get(User, world["users"][1]).facts_revision > member_facts_before
+        member_notifications = list(db.scalars(select(Notification).where(Notification.user_id == world["users"][1])))
+        assert all(row.href != f"/projects/{project['id']}" for row in member_notifications)

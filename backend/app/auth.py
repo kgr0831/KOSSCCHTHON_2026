@@ -118,7 +118,7 @@ def issue_session(db, user_id, response, family_id=None):
     return {"access_token": access, "token_type": "bearer", "expires_in": 900, "user_id": user_id}
 
 
-def current_user(db: DB, authorization: Annotated[str | None, Header()] = None) -> User:
+def current_session(db: DB, authorization: Annotated[str | None, Header()] = None) -> tuple[User, AuthSession]:
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(401, "로그인이 필요합니다.")
     row = db.scalar(select(AuthSession).where(AuthSession.access_hash == digest(authorization[7:]),
@@ -127,10 +127,15 @@ def current_user(db: DB, authorization: Annotated[str | None, Header()] = None) 
     user = db.get(User, row.user_id) if row else None
     if not user or user.account_status != "active":
         raise HTTPException(401, "로그인이 만료되었습니다.")
-    return user
+    return user, row
+
+
+def current_user(db: DB, authorization: Annotated[str | None, Header()] = None) -> User:
+    return current_session(db, authorization)[0]
 
 
 Actor = Annotated[User, Depends(current_user)]
+SessionActor = Annotated[tuple[User, AuthSession], Depends(current_session)]
 
 
 def admin_user(user: Actor):

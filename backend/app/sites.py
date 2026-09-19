@@ -8,10 +8,12 @@ from sqlalchemy import func, select, update
 from .auth import Actor, Input
 from .common import DB, data, lock_user, owner, required, update_revision
 from .config import get_settings
-from .models import Job, PersonalSite, Publication, SiteVersion, User, now
+from .document_references import selected_references
+from .models import Job, PersonalSite, Publication, SiteVersion, SiteVersionReferenceInput, User, now
 from .profiles import public_user
 from .site_render import html_document, safe_markup, update_fields
 from .styles import get_style, styles
+from .subscriptions import AIPlanUser, can_generate_ai_documents
 
 router = APIRouter(prefix="/api/v1", tags=["personal documents"])
 Kind = Literal["portfolio", "profile_pr", "cv", "cover_letter"]
@@ -51,6 +53,7 @@ class NewVersion(Input):
     consent: Literal[True]
     revision: int = Field(ge=0)
     base_version_id: str | None = None
+    reference_ids: list[str] = Field(default_factory=list, max_length=5)
 
 
 def own_site(db, user, site_id):
@@ -93,9 +96,16 @@ def list_sites(db: DB, user: Actor):
 
 
 @router.post("/me/sites/{kind}/versions", status_code=202)
-def generate(kind: Kind, body: NewVersion, db: DB, user: Actor):
-    style = get_style(body.style_id, db, user)
+def generate(kind: Kind, body: NewVersion, db: DB, user: AIPlanUser):
     user = lock_user(db, user.id)
+    if not can_generate_ai_documents(user):
+        raise HTTPException(403, "AI document generation requires a PREMIUM plan.")
+    style = get_style(body.style_id, db, user)
+    references = selected_references(db, user.id, kind, body.reference_ids)
+    if any(reference.image_content for reference in references):
+        from .ai import provider_for
+        if not provider_for(db, user.id).supports_image_inputs("hard"):
+            raise HTTPException(422, "PNG/JPG 참고 자료는 이 PC의 Codex CLI 연결에서만 사용할 수 있어요.")
     site = db.scalar(select(PersonalSite).where(PersonalSite.user_id == user.id, PersonalSite.site_kind == kind))
     if not site:
         if body.revision != 0:
@@ -116,6 +126,8 @@ def generate(kind: Kind, body: NewVersion, db: DB, user: Actor):
     row = next_version(db, site, user, edit_mode="ai", style_id=style["id"], instruction=body.instruction,
                        base_version_id=base.id if base else None, public_input_snapshot=snapshot,
                        validation={"base_site_revision": site.revision})
+    db.add_all(SiteVersionReferenceInput(version_id=row.id, reference_id=reference.id,
+                                         reference_revision=reference.revision) for reference in references)
     db.add(Job(user_id=user.id, kind="site", target_id=row.id))
     return {**version_data(row), "site_revision": site.revision}
 

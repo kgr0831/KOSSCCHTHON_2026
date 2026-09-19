@@ -9,6 +9,7 @@ from .common import DB, data, lock_user, required, update_revision
 from .config import get_settings
 from .local_runtime import cli_allowed, device_id
 from .models import AISettings, User
+from .subscriptions import AIPlanUser, can_generate_ai_documents
 
 router = APIRouter(prefix="/api/v1")
 
@@ -138,7 +139,10 @@ class WritingDraft(Input):
 
 
 @router.post("/ai/writing-drafts")
-def writing(body: WritingInput, db: DB, user: Actor, ai: AIProvider = Depends(get_ai)):
+def writing(body: WritingInput, db: DB, user: AIPlanUser, ai: AIProvider = Depends(get_ai)):
     from .profiles import public_user
+    user = lock_user(db, user.id)
+    if not can_generate_ai_documents(user):
+        raise HTTPException(403, "AI document generation requires a PREMIUM plan.")
     return ai.generate("입력된 실제 경험을 바탕으로 읽기 쉬운 한국어 초안을 작성하세요. 새 사실을 만들지 말고 부족한 정보는 questions로 물어보세요.",
                        {"kind": body.kind, "notes": body.text, "profile": public_user(db, user)}, WritingDraft)

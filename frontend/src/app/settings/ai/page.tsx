@@ -8,7 +8,7 @@ import { AuthGate, ErrorMessage, Field, Loading, PageHeading } from "@/component
 
 type Connection = { provider: string; device_id: string; device_name: string; executable_path: string; account_email: string; status: string; models: string[]; default_model: string; checked_at: string; current_pc: boolean };
 type Settings = { transport: string; easy_model: string; hard_model: string; cli_provider: string; cli_model: string; cli_connections: Connection[]; revision: number };
-type Providers = { api: { configured: boolean; models: string[]; error?: string }; cli: { allowed: boolean; codex_installed: boolean; claude_installed: boolean }; consent_text: string };
+type Providers = { api: { configured: boolean; models: string[]; error?: string }; cli: { allowed: boolean; codex_installed: boolean; claude_installed: boolean; connection: string }; consent_text: string };
 const statusText: Record<string, string> = { connected: "로그인 확인됨", needs_login: "구독 계정 로그인 필요", not_installed: "설치 필요", error: "확인 실패 · 다시 확인해 주세요" };
 
 export default function AISettingsPage() { return <AuthGate><SettingsPage /></AuthGate>; }
@@ -29,6 +29,8 @@ function SettingsForm({ initial, providers }: { initial: Settings; providers?: P
   const allowed = providers?.cli.allowed === true;
   const connections = form.cli_connections || [];
   const current = connections.find(x => x.current_pc && x.provider === form.cli_provider);
+  const connected = current?.status === "connected";
+  const installed = (family: "codex" | "claude") => family === "codex" ? providers?.cli.codex_installed === true : providers?.cli.claude_installed === true;
   async function save() {
     setBusy(true); setSaved(false); setError(null);
     try {
@@ -43,6 +45,7 @@ function SettingsForm({ initial, providers }: { initial: Settings; providers?: P
     try {
       const result = await api<Settings>(`/me/ai-cli-connections/${family}/check`, { method: "POST" });
       setForm(result); client.setQueryData(["ai-settings"], result);
+      await client.invalidateQueries({ queryKey: ["ai-providers"] });
     } catch (e) { setError(e); } finally { setBusy(false); }
   }
   return <section className="panel stack">
@@ -62,7 +65,8 @@ function SettingsForm({ initial, providers }: { initial: Settings; providers?: P
       <p className="muted">연결 상태는 마지막 확인 당시의 로그인 상태예요. 구독 만료·해지 또는 사용량 제한은 생성할 때 확인될 수 있습니다. 다른 PC에서는 그 PC에서 다시 로그인하고 연결을 확인해 주세요.</p>
       {allowed ? <>
         <p>BAT 실행 터미널에서 <kbd>X</kbd>로 Codex, <kbd>C</kbd>로 Claude에 로그인한 뒤 아래에서 확인해 주세요. 확인하면 저장하지 않은 설정은 마지막 저장 상태로 돌아갑니다.</p>
-        <div className="actions">{(["codex", "claude"] as const).map(family => <button className="button" key={family} disabled={busy} onClick={() => check(family)}>{family === "codex" ? "Codex" : "Claude"} 연결 확인</button>)}</div>
+        {(["codex", "claude"] as const).map(family => !installed(family) && <p className="notice" key={`${family}-install`}><strong>{family === "codex" ? "Codex" : "Claude"} CLI 설치가 필요합니다.</strong> {family === "codex" ? <><code>npm install -g @openai/codex</code>로 설치한 뒤 BAT에서 <kbd>X</kbd> 로그인을 완료해 주세요.</> : <><code>npm install -g @anthropic-ai/claude-code</code>로 설치한 뒤 <kbd>C</kbd> 로그인을 완료해 주세요.</>}</p>)}
+        <div className="actions">{(["codex", "claude"] as const).map(family => <button className="button" key={family} disabled={busy || !installed(family)} onClick={() => check(family)}>{family === "codex" ? "Codex" : "Claude"} 연결 확인</button>)}</div>
       </> : <p className="notice">배포 웹에서는 저장된 기록만 볼 수 있어요. 연결 확인과 CLI 생성은 PC에서 BAT로 실행해 주세요.</p>}
       {connections.length === 0 ? <p className="muted">저장된 CLI 연결 기록이 없습니다.</p> : connections.map(x => <article className="panel" key={x.device_id + x.provider} style={{ overflowWrap: "anywhere", minWidth: 0 }}>
         <h3>{x.provider === "codex" ? "Codex" : "Claude"} · {x.device_name}{x.current_pc ? " · 이 PC" : ""}</h3>
@@ -71,9 +75,10 @@ function SettingsForm({ initial, providers }: { initial: Settings; providers?: P
       {allowed && <>
         <Field label="PC CLI 제공자"><select value={form.cli_provider || "codex"} disabled={busy} onChange={e => setForm({ ...form, cli_provider: e.target.value, cli_model: "" })}><option value="codex">Codex · 기본</option><option value="claude">Claude</option></select></Field>
         <Field label="PC CLI 모델"><select value={form.cli_model || ""} disabled={busy || !current} onChange={e => setForm({ ...form, cli_model: e.target.value })}><option value="">CLI 기본 모델{current?.default_model ? ` · ${current.default_model}` : ""}</option>{current?.models.map(model => <option key={model} value={model}>{model}</option>)}</select></Field>
+        {form.transport !== "api" && !connected && <p className="notice" role="status">선택한 PC CLI의 연결 확인이 완료되어야 CLI 또는 혼합 연결을 저장할 수 있습니다.</p>}
       </>}
     </div>
-    <button className="button primary" disabled={busy || !providers} onClick={save}>{busy ? "처리 중…" : "연결 설정 저장"}</button>
+    <button className="button primary" disabled={busy || !providers || (form.transport !== "api" && !connected)} onClick={save}>{busy ? "처리 중…" : "연결 설정 저장"}</button>
     <ErrorMessage error={error} />{saved && <p className="notice" role="status">설정을 저장했어요.</p>}<p className="muted">{providers?.consent_text}</p>
   </section>;
 }

@@ -22,6 +22,7 @@ from .models import Job, Material, now
 from .site_render import html_document, validate_code
 from .sites import Code
 from .styles import REFERENCE_DOCUMENT, get_style, style_data
+from .subscriptions import AIPlanUser, can_generate_ai_documents
 
 router = APIRouter(prefix="/api/v1/portfolio-styles", tags=["design documents"])
 
@@ -40,7 +41,7 @@ def create_style(db, user, markdown, filename, source_style_id=None):
 
 
 @router.post("/upload", status_code=202)
-async def upload_design(file: UploadFile, db: DB, user: Actor, consent: bool = Form(False)):
+async def upload_design(file: UploadFile, db: DB, user: AIPlanUser, consent: bool = Form(False)):
     if not consent:
         raise HTTPException(422, "디자인 MD를 AI로 전송해 예시 이미지를 만드는 데 동의해 주세요.")
     raw = await file.read(65537)
@@ -54,7 +55,9 @@ async def upload_design(file: UploadFile, db: DB, user: Actor, consent: bool = F
         raise HTTPException(422, "UTF-8 인코딩의 MD 파일이 필요해요.") from None
     if not markdown.strip() or "\x00" in markdown:
         raise HTTPException(422, "내용이 있는 디자인 문서를 선택해 주세요.")
-    lock_user(db, user.id)
+    user = lock_user(db, user.id)
+    if not can_generate_ai_documents(user):
+        raise HTTPException(403, "AI document generation requires a PREMIUM plan.")
     return create_style(db, user, markdown, filename)
 
 
@@ -68,8 +71,10 @@ class Preview(Input):
 
 
 @router.post("/{style_id}/preview", status_code=202)
-def preview(style_id: str, body: Preview, db: DB, user: Actor):
-    lock_user(db, user.id)
+def preview(style_id: str, body: Preview, db: DB, user: AIPlanUser):
+    user = lock_user(db, user.id)
+    if not can_generate_ai_documents(user):
+        raise HTTPException(403, "AI document generation requires a PREMIUM plan.")
     style = get_style(style_id, db, user)
     if style_id.startswith("uploaded-"):
         row = db.scalar(select(Material).where(Material.id == style_id.removeprefix("uploaded-"), Material.user_id == user.id, Material.material_kind == "design_md"))
@@ -115,6 +120,8 @@ def perform_style(factory, job_id, token):
             return
         user = lock_user(db, job.user_id)
         row = db.get(Material, job.target_id)
+        if not can_generate_ai_documents(user):
+            raise HTTPException(403, "AI portfolio generation requires a PREMIUM plan.")
         if row.user_id != user.id or user.account_status != "active" or row.access_status != "available":
             raise HTTPException(409, "디자인을 사용할 수 없어요.")
         row.metadata_json = {**row.metadata_json, "status": "running"}
@@ -137,6 +144,8 @@ def perform_style(factory, job_id, token):
             return
         user = lock_user(db, job.user_id)
         row = db.get(Material, job.target_id)
+        if not can_generate_ai_documents(user):
+            raise HTTPException(403, "AI portfolio generation requires a PREMIUM plan.")
         if row.user_id != user.id or user.account_status != "active" or row.access_status != "available" or row.revision != revision:
             raise HTTPException(409, "디자인 사용이 철회됐어요.")
         row.metadata_json = {**row.metadata_json, **images, "status": "ready", "error": None, "model": ai.last_model}

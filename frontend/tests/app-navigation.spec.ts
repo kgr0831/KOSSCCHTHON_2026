@@ -11,6 +11,8 @@ async function fixtures(page: Page, guest = false) {
     if (path === "/auth/google") result = { url: new URL("/auth/callback?code=fixture-code", page.url()).href };
     if (path === "/auth/google/callback") { loggedIn = true; result = { access_token: "fixture-only" }; }
     if (path === "/me") result = user;
+    if (path === "/me/subscription") result = { plan: "premium" };
+    if (path === "/me/ai-settings") result = { transport: "api", cli_provider: "codex", cli_connections: [] };
     if (path === "/me/preferences") result = user.preferences;
     if (path === "/projects") result = { items: [{ id: "p1", title: "작은 아이디어를 함께 완성하는 프로젝트", summary: "내용 ".repeat(60), project_status: "planning", visibility: "private", member_count: 3 }], next_cursor: null };
     if (path === "/recruitment-posts") result = { items: [{ id: "post1", project_id: "p1", project_title: "사람을 연결하는 서비스", description: "함께 만들어요.", role_openings: [{ id: "r1", role: "웹과모바일의반응형사용자경험을개발하는프론트엔드담당자", filled: 0, capacity: 1 }] }], next_cursor: null };

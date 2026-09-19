@@ -3,7 +3,7 @@ WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --include=dev --include=optional
 COPY frontend/ ./
-ENV NEXT_TELEMETRY_DISABLED=1
+ENV NEXT_TELEMETRY_DISABLED=1 NEXT_PUBLIC_SELF_HOSTED=1
 RUN npm run build
 
 FROM ghcr.io/astral-sh/uv:0.12.17 AS uv

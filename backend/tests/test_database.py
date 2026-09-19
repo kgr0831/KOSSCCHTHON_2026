@@ -11,7 +11,7 @@ from sqlalchemy.engine import make_url
 from app.config import LOCAL_DATABASE_URL, Settings
 from app.db import Base, make_engine
 from app.migrate_sqlite import TransferError, copy_rows, counts, source_engine
-from app.models import AuthSession, Job, PersonalSite, SiteVersion, User
+from app.models import AuthSession, Job, PersonalSite, RealtimeEvent, RealtimeTicket, SiteVersion, User, now
 
 
 def test_supabase_dotenv_driver_and_secret_safe_errors(tmp_path):
@@ -129,6 +129,26 @@ def test_transfer_failure_rolls_back_all_rows_and_source_is_read_only(world, tmp
                 read.execute(User.__table__.update().values(account_status="inactive"))
     finally:
         source.dispose()
+        target.dispose()
+
+
+def test_transfer_skips_realtime_credentials_and_disposable_events(world, tmp_path):
+    source = world["factory"].kw["bind"]
+    target = make_engine(f"sqlite:///{tmp_path / 'target.db'}")
+    Base.metadata.create_all(target)
+    try:
+        world["auth"](0)
+        with world["factory"].begin() as db:
+            session = db.scalar(select(AuthSession).where(AuthSession.user_id == world["users"][0]))
+            db.add(RealtimeTicket(user_id=world["users"][0], session_id=session.id,
+                                  token_hash="f" * 64, expires_at=now()))
+            db.add(RealtimeEvent(target_user_id=world["users"][0], kind="fixture"))
+        with source.connect() as read, target.begin() as write:
+            copy_rows(read, write)
+        with target.connect() as db:
+            assert db.scalar(select(func.count()).select_from(RealtimeTicket)) == 0
+            assert db.scalar(select(func.count()).select_from(RealtimeEvent)) == 0
+    finally:
         target.dispose()
 
 

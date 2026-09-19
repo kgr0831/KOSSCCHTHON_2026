@@ -109,6 +109,33 @@ def test_codex_uses_stdin_disables_tools_and_does_not_inherit_server_secrets(mon
     assert not list(Path(tmp_path).rglob("request-*"))
 
 
+def test_codex_reference_images_use_ephemeral_request_files(monkeypatch, tmp_path, connection):
+    settings = Settings(_env_file=None, project_root=tmp_path)
+    monkeypatch.setattr("app.ai.get_settings", lambda: settings)
+    monkeypatch.setattr("app.ai.cli_command", lambda _: ["node", "C:/fixture/codex.js"])
+    monkeypatch.setattr("app.cli_metadata.probe_cli", lambda _: connection)
+    captured = {}
+
+    class Process:
+        returncode = 0
+
+        def __init__(self, args, **kwargs):
+            captured.update(args=args, **kwargs)
+
+        def communicate(self, prompt, timeout):
+            captured["prompt"] = prompt
+            return '{"connected":true}', ""
+
+    monkeypatch.setattr("app.ai.subprocess.Popen", Process)
+    result = AIProvider("cli", cli_connection=connection)._cli("fixture", {}, "hard", [{
+        "name": "private.png", "content_type": "image/png", "content": b"\x89PNG\r\n\x1a\nfixture",
+    }])
+    image_path = Path(captured["args"][captured["args"].index("--image") + 1])
+    assert result == '{"connected":true}' and image_path.suffix == ".png"
+    assert not image_path.exists() and not list(Path(tmp_path).rglob("request-*"))
+    assert "private.png" not in captured["prompt"]
+
+
 def test_worker_never_claims_other_pc_or_cloud_jobs(world, monkeypatch):
     monkeypatch.setattr("app.worker.get_settings", lambda: Settings(_env_file=None, database_url="postgresql://localhost/fixture"))
     monkeypatch.setattr("app.worker.execution_target", lambda: "pc:mine")
