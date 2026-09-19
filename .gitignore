@@ -1,0 +1,4 @@
+# Keep this repository intentionally limited to the project blueprint.
+*
+!.gitignore
+!blueprint.md
