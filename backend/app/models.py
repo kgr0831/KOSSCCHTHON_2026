@@ -23,6 +23,7 @@ class Entity:
 class User(Entity, Base):
     __tablename__ = "users"
     login_email: Mapped[str] = mapped_column(String(254), unique=True)
+    supabase_user_id: Mapped[str | None] = mapped_column(String(36), unique=True)
     account_status: Mapped[str] = mapped_column(default="active")
     is_admin: Mapped[bool] = mapped_column(default=False)
     # Locks all fact mutations, snapshots and publication decisions for this owner.
@@ -93,6 +94,7 @@ class AuthSession(Entity, Base):
     __tablename__ = "auth_sessions"
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
     family_id: Mapped[str] = mapped_column(index=True)
+    auth_provider: Mapped[str] = mapped_column(default="local", server_default="local")
     refresh_hash: Mapped[str] = mapped_column(String(64), unique=True)
     access_hash: Mapped[str] = mapped_column(String(64), unique=True)
     access_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

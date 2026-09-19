@@ -43,9 +43,9 @@ test("mobile login retains the selected view and all five navigation positions",
   await fixtures(page, true);
   await page.goto("/projects");
   const nav = page.getByRole("navigation", { name: "모바일 주요 메뉴" });
-  await expect(page.getByRole("link", { name: "학교 이메일로 시작하기" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Google로 시작하기" })).toBeVisible();
   const address = page.url(), before = await nav.boundingBox();
-  await page.getByRole("link", { name: "학교 이메일로 시작하기" }).click();
+  await page.getByRole("link", { name: "Google로 시작하기" }).click();
   const dialog = page.getByRole("dialog", { name: "로그인 · 회원가입", exact: true });
   await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: /김민준/ }).click();

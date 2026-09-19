@@ -113,6 +113,10 @@ uv run --directory backend python ../scripts/verify_launcher.py
 
 실제 이메일 인증에는 `.env`의 SMTP 또는 HTTPS 메일 설정이 필요합니다. Brevo는 `DUDRI_MAIL_PROVIDER=brevo`, `DUDRI_MAIL_API_KEY`, 인증된 발신 주소인 `DUDRI_SMTP_SENDER`를 사용합니다. 키는 서버에서만 읽으며 로컬 체험에는 메일 설정이 필요 없습니다. Figma 댓글별 반영은 [디자인 기록](docs/design/README.md), 전체 Architecture 범위의 남은 항목은 [구현 기록](IMPLEMENTATION.md)을 참고하세요.
 
+Google 로그인은 `DUDRI_SUPABASE_URL`과 `DUDRI_SUPABASE_PUBLISHABLE_KEY`를 사용하는 서버 PKCE 방식입니다. Supabase Google provider의 콜백은 `<Supabase URL>/auth/v1/callback`, 앱의 허용 리디렉션은 `<DUDRI_APP_ORIGIN>/auth/callback`입니다. access token은 브라우저 메모리, refresh token은 HttpOnly 쿠키에 보관하며 앱 DB에는 세션 해시만 저장합니다.
+
+기존 이메일 계정은 먼저 로그인한 뒤 프로필의 **이 계정에 Google 연결**을 사용합니다. 이메일 주소만 같다는 이유로 저장 자료의 소유권을 합치지 않습니다. 프로필의 학교 이메일 인증은 현재 계정에 학교 소속과 이메일 확인을 추가하며 로그인 이메일을 바꾸지 않습니다. 확인 링크는 요청한 계정에서 15분 안에 한 번만 사용할 수 있습니다.
+
 ## 배포 준비 상태
 
 무료 배포 구성은 **Vercel Hobby(프런트) + Render Free(API·worker·문서 제공기 한 개 인스턴스) + Supabase Free(DB·Auth)**입니다. `Dockerfile`, `scripts/run_deployed.py`, `render.yaml`, `frontend/vercel.json`, GitHub Actions의 `Deployment check`를 준비했습니다. 로컬 `.env`·DB·런타임·인계 문서는 이미지에 포함하지 않습니다.
@@ -121,4 +125,4 @@ Vercel 프로젝트 루트는 `frontend`로 지정하고 `API_ORIGIN`과 `DUDRI_
 
 유료 플랜·무료 체험 후 자동 유료 전환은 사용하지 않습니다. Render 무료 서비스는 유휴 시 절전되므로 첫 요청에 시간이 걸리고, 작업은 재기동 후 DB에서 복구합니다. 일반 SMTP 포트가 차단되어 Brevo 무료 HTTPS 메일 발송을 연결했습니다. 계정 인증·발신자 설정과 연결 확인 메일의 배달을 검증했으며, 학교 인증 링크의 실제 사용 검증은 남아 있습니다. 플랫폼별 무료 사용량을 넘기지 않도록 결제 수단·추가 과금 설정을 확인해야 합니다.
 
-실제 배포·공개 URL 검증, Google Supabase Auth, 로그인 후 별도 학교 이메일 인증은 아직 미완료입니다. 현재 파일이 있다는 사실만으로 배포나 인증이 완료된 것은 아닙니다.
+현재 앱은 https://dudri-app.vercel.app , API·공개 문서 제공기는 https://dudri-api.onrender.com 에 무료 배포했습니다. 공개 화면·API 프록시·Supabase health와 비로그인 접근 차단을 확인했습니다. Google 로그인과 로그인 후 별도 학교 이메일 인증 코드는 추가했으며, 이 인증 변경의 운영 배포·실제 로그인·학교 메일 확인은 아직 검증 중입니다.

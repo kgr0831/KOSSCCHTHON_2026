@@ -29,3 +29,7 @@ services:
         sync: false
       - key: DUDRI_SMTP_SENDER
         sync: false
+      - key: DUDRI_SUPABASE_URL
+        sync: false
+      - key: DUDRI_SUPABASE_PUBLISHABLE_KEY
+        sync: false

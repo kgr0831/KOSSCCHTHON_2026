@@ -209,3 +209,29 @@ def test_cloud_rejects_subscription_cli_before_execution(monkeypatch):
     with pytest.raises(HTTPException) as error:
         AIProvider("cli")._cli("fixture", {}, "hard")
     assert error.value.status_code == 403
+
+
+def test_import_legacy_sqlite_without_supabase_identity_column(tmp_path, monkeypatch):
+    legacy_url = f"sqlite:///{tmp_path / 'legacy.db'}"
+    monkeypatch.setattr("app.config.get_settings", lambda: Settings(_env_file=None, database_url=legacy_url))
+    backend = Path(__file__).resolve().parents[1]
+    config = Config(str(backend / "alembic.ini"))
+    config.set_main_option("script_location", str(backend / "migrations"))
+    command.upgrade(config, "c28170e1b9ad")
+    source = make_engine(legacy_url)
+    target = make_engine(f"sqlite:///{tmp_path / 'new.db'}")
+    Base.metadata.create_all(target)
+    try:
+        with source.begin() as db:
+            db.exec_driver_sql("INSERT INTO users (id, created_at, login_email, account_status, is_admin, facts_revision) "
+                               "VALUES ('legacy-owner', '2026-01-01 00:00:00', 'legacy@example.com', 'active', 0, 1)")
+        with source.connect() as read, target.begin() as write:
+            copy_rows(read, write)
+        with target.connect() as db:
+            assert db.scalar(select(User.id)) == "legacy-owner"
+            assert db.scalar(select(User.supabase_user_id)) is None
+        command.upgrade(config, "head")
+        command.downgrade(config, "c28170e1b9ad")
+    finally:
+        source.dispose()
+        target.dispose()

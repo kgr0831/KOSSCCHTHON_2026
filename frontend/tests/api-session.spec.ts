@@ -75,3 +75,15 @@ test("logging out while a request is in flight cannot refresh the session", asyn
   await rejected;
   expect(calls).toBe(1);
 });
+
+test("a cookie changed by another tab cannot replay the previous owner's mutation", async () => {
+  const paths: string[] = [];
+  setAccessToken("account-a-fixture", "user-a");
+  globalThis.fetch = async input => {
+    paths.push(String(input));
+    if (String(input).endsWith("/auth/refresh")) return Response.json({ access_token: "account-b-fixture", user_id: "user-b" });
+    return Response.json({}, { status: 401 });
+  };
+  await expect(api("/me", { method: "PATCH", body: '{"bio":"A draft"}' })).rejects.toMatchObject({ code: "SESSION_CHANGED" });
+  expect(paths).toEqual(["/api/v1/me", "/api/v1/auth/refresh"]);
+});

@@ -51,8 +51,8 @@
 이번 로컬 요청의 구현과 기존 Architecture 전체의 완료 상태를 구분합니다.
 
 - 실서비스 이메일은 SMTP 또는 Brevo HTTPS API를 사용합니다. Brevo 무료 계정·발신자와 연결 확인 메일의 배달을 검증했습니다. 운영 학교 인증 권한 게이트 및 보조 인증 정책은 별도 검토 대상입니다.
-- Supabase PostgreSQL 연결·이전·앱 저장 검증은 완료했습니다. Linux Docker/Render/CI 구성은 준비되어 있으며 실제 배포는 아직 미완료입니다. GitHub OAuth·저장소 동기화, 외부 URL 수집, Supabase Storage는 남아 있습니다.
-- Google Supabase Auth 로그인과 같은 계정의 별도 학교 이메일 인증, 실제 인증 링크의 발송·사용 검증은 아직 미완료입니다. 순천향대(sch.ac.kr)·국민대(kookmin.ac.kr)·숭실대(soongsil.ac.kr) 인증 지원을 최종 FIFO 항목으로 확인할 예정입니다.
+- Supabase PostgreSQL 연결·이전·앱 저장 검증과 Vercel Hobby/Render Free 배포의 공개 health·API 프록시 검증을 완료했습니다. GitHub OAuth·저장소 동기화, 외부 URL 수집, Supabase Storage는 남아 있습니다.
+- Google Supabase Auth PKCE·기존 소유자 명시적 연결·세션 갱신과 동일 계정의 별도 학교 이메일 인증을 구현했습니다. 인증 변경의 실제 운영 로그인·메일 링크 확인은 검증 중입니다. 순천향대(sch.ac.kr)·국민대(kookmin.ac.kr)·숭실대(soongsil.ac.kr) 인증 지원을 최종 FIFO 항목으로 확인할 예정입니다.
 - 운영 환경의 사용자별 구독 CLI 연결은 미구현이며 현재 API 모드만 허용합니다.
 - 소속 편집 전용 UI, 프로젝트 초대·팀원 기여 편집 UI·일부 목록의 다음 페이지 UI는 추가 범위입니다.
 - CV는 영속 문서 생성과 정적 HTML 내보내기를 제공하며 PDF는 브라우저 인쇄로 저장합니다. 서버 PDF 내보내기·스캔 OCR은 없습니다.

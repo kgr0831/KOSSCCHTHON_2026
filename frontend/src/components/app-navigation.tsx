@@ -22,6 +22,7 @@ const screens = {
   "/projects": lazy(() => import("@/app/projects/page")),
   "/projects/new": lazy(() => import("@/app/projects/new/page")),
   "/projects/:id": lazy(() => import("@/app/projects/[id]/page")),
+  "/auth/callback": lazy(() => import("@/app/auth/callback/page")),
   "/auth/confirm": lazy(() => import("@/app/auth/confirm/page")),
 };
 function screenKey(path: string) { return path in screens ? path as keyof typeof screens : path.replace(/\/(users|coffee|bookings|projects)\/[^/]+$/, "/$1/:id") as keyof typeof screens; }
@@ -32,7 +33,7 @@ function normalize(href: string) {
   if (url.pathname === "/auth") return "/auth";
   if (!screens[screenKey(url.pathname)]) return null;
   // Authentication fragments must never be persisted to app history or storage.
-  if (url.pathname === "/auth/confirm") return "/auth/confirm";
+  if (url.pathname === "/auth/confirm" || url.pathname === "/auth/callback") return url.pathname;
   return url.pathname + url.search + url.hash;
 }
 type Options = { scroll?: boolean };
@@ -57,7 +58,7 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
   useEffect(() => {
     if (!initialized.current) {
       initialized.current = true;
-      const confirm = window.location.pathname === "/auth/confirm";
+      const confirm = ["/auth/confirm", "/auth/callback"].includes(window.location.pathname);
       const initial = normalize(window.history.state?.dudriView || window.location.href) || "/";
       setRoute(initial === "/auth" ? "/" : initial); setAuthOpen(initial === "/auth"); setReady(true);
       if (!confirm) window.history.replaceState({ ...window.history.state, dudriView: initial === "/auth" ? "/" : initial }, "", "/");
@@ -74,7 +75,7 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
     const next = normalize(href);
     if (!next) return;
     if (next === "/auth") {
-      try { sessionStorage.setItem("dudri.authReturn", route === "/auth/confirm" ? "/profile" : route); } catch {}
+      try { sessionStorage.setItem("dudri.authReturn", ["/auth/confirm", "/auth/callback"].includes(route) ? "/profile" : route); } catch {}
       setAuthOpen(true); return;
     }
     if (next === route) return;
@@ -89,15 +90,15 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
   const closeAuth = useCallback(() => setAuthOpen(false), []);
   const finishLogin = useCallback(() => {
     setAuthOpen(false);
-    if (route === "/auth/confirm") {
+    if (["/auth/confirm", "/auth/callback"].includes(route)) {
       let destination = "/profile";
       try { destination = normalize(sessionStorage.getItem("dudri.authReturn") || "/profile") || "/profile"; sessionStorage.removeItem("dudri.authReturn"); } catch {}
-      replace(destination === "/auth/confirm" || destination === "/auth" ? "/profile" : destination);
+      replace(["/auth/confirm", "/auth/callback", "/auth"].includes(destination) ? "/profile" : destination);
     }
   }, [route, replace]);
   useEffect(() => {
     const hash = route.split("#")[1];
-    if (!hash || route.startsWith("/auth/confirm")) return;
+    if (!hash || route.startsWith("/auth/")) return;
     const find = () => { const target = document.getElementById(hash); if (!target) return false; target.scrollIntoView({ block: "start" }); return true; };
     if (find()) return;
     const observer = new MutationObserver(() => { if (find()) observer.disconnect(); });
@@ -110,7 +111,7 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
     const anchor = (event.target as Element).closest<HTMLAnchorElement>("a[href]");
     if (!anchor || anchor.target || anchor.hasAttribute("download")) return;
     if (anchor.getAttribute("href")?.startsWith("#")) { event.preventDefault(); push(route.split("#")[0] + anchor.getAttribute("href")); return; }
-    if (new URL(anchor.href).pathname === "/auth/confirm") return;
+    if (["/auth/confirm", "/auth/callback"].includes(new URL(anchor.href).pathname)) return;
     if (normalize(anchor.href)) { event.preventDefault(); push(anchor.href); }
   }}>{children}</div></Context.Provider>;
 }

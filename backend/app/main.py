@@ -19,13 +19,14 @@ from . import (
     projects,
     search,
     sites,
+    supabase_auth,
 )
 from .common import DB
 
 
 def create_app():
     application = FastAPI(title="두드리 API", version="0.1.0")
-    for module in (auth, profiles, coffee, projects, search, dev, ai_routes, sites, materials, career, design_upload):
+    for module in (auth, supabase_auth, profiles, coffee, projects, search, dev, ai_routes, sites, materials, career, design_upload):
         application.include_router(module.router)
 
     @application.get("/")

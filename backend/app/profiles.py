@@ -71,6 +71,7 @@ def public_user(db, user):
 @router.get("/me")
 def me(db: DB, user: Actor):
     return {"id": user.id, "login_email": user.login_email, "account_status": user.account_status,
+            "google_connected": bool(user.supabase_user_id),
             "profile": data(required(db, Profile, user.id)),
             "school_affiliations": affiliations_for(db, user.id),
             "preferences": data(required(db, Preference, user.id)), "tags": tags_for(db, user.id)}

@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from sqlalchemy import func, select, update
 
-from .common import DB, data, required, utc
+from .common import DB, data, facts_changed, lock_user, required, utc
 from .config import get_settings
 from .models import (
     Affiliation,
@@ -91,11 +91,13 @@ def challenge(db, email, purpose, payload, mailer, user_id=None):
     return {"status": "accepted", "message": "인증 메일 발송을 요청했습니다. 이메일을 확인해 주세요."}
 
 
-def consume(db, token, purpose):
+def consume(db, token, purpose, user_id=None):
     row = db.scalar(select(AuthChallenge).where(AuthChallenge.token_hash == digest(token),
                     AuthChallenge.purpose == purpose))
     if not row or row.consumed_at or utc(row.expires_at) <= now():
         raise HTTPException(401, "인증 링크가 만료되었거나 이미 사용되었습니다.")
+    if user_id is not None and row.user_id != user_id:
+        raise HTTPException(403, "인증을 요청한 계정으로 로그인해 주세요.")
     result = db.execute(update(AuthChallenge).where(AuthChallenge.id == row.id,
                         AuthChallenge.consumed_at.is_(None), AuthChallenge.expires_at > now())
                         .values(consumed_at=now()).execution_options(synchronize_session=False))
@@ -112,7 +114,8 @@ def issue_session(db, user_id, response, family_id=None):
                        expires_at=now() + timedelta(days=30)))
     response.set_cookie("dudri_refresh", refresh, httponly=True, secure=settings.environment == "production",
                         samesite="strict", path="/api/v1/auth", max_age=30 * 86400)
-    return {"access_token": access, "token_type": "bearer", "expires_in": 900}
+    response.headers["Cache-Control"] = "no-store"
+    return {"access_token": access, "token_type": "bearer", "expires_in": 900, "user_id": user_id}
 
 
 def current_user(db: DB, authorization: Annotated[str | None, Header()] = None) -> User:
@@ -180,16 +183,24 @@ def university_domains(university_id: str, db: DB):
 
 @router.post("/auth/school-email-verifications", status_code=202)
 def school_start(body: SchoolSignup, db: DB, mailer=Depends(get_mailer)):
+    if get_settings().environment == "production":
+        raise HTTPException(403, "Google 로그인 후 프로필에서 학교 이메일을 인증해 주세요.")
+    payload = school_payload(body, db)
+    return challenge(db, str(body.email).lower(), "school", payload, mailer)
+
+
+def school_payload(body, db):
     university = required(db, University, body.university_id)
     domain = db.scalar(select(UniversityDomain).where(UniversityDomain.university_id == university.id,
                        UniversityDomain.domain == str(body.email).split("@")[1].lower()))
     if not university.is_supported or not domain:
         raise HTTPException(422, "선택한 학교의 허용 이메일 도메인과 일치하지 않습니다.")
-    payload = body.model_dump(mode="json") | {"domain_id": domain.id}
-    return challenge(db, str(body.email).lower(), "school", payload, mailer)
+    return body.model_dump(mode="json") | {"domain_id": domain.id}
 
 
 def confirm_school(token, db, response):
+    if get_settings().environment == "production":
+        raise HTTPException(403, "Google 로그인 후 학교 이메일을 인증해 주세요.")
     row = consume(db, token, "school")
     user = db.scalar(select(User).where(User.login_email == row.email))
     if not user:
@@ -210,6 +221,44 @@ def confirm_school(token, db, response):
     return issue_session(db, user.id, response)
 
 
+class SchoolVerification(Input):
+    email: EmailStr
+    university_id: str
+    enrollment_status: Literal["student", "graduate", "leave", "other"]
+    department: str = Field(default="", max_length=150)
+    entry_year: int | None = Field(default=None, ge=1900, le=2200)
+
+
+@router.post("/me/school-email-verifications", status_code=202)
+def school_attach_start(body: SchoolVerification, db: DB, user: Actor, mailer=Depends(get_mailer)):
+    return challenge(db, str(body.email).lower(), "school_attach", school_payload(body, db), mailer, user.id)
+
+
+@router.post("/me/school-email-verifications/confirm")
+def school_attach_confirm(body: TokenInput, db: DB, user: Actor):
+    row = consume(db, body.token, "school_attach", user.id)
+    details = SchoolVerification(**{key: value for key, value in row.payload.items() if key != "domain_id"})
+    payload = school_payload(details, db)  # Recheck support after a link has been sent.
+    lock_user(db, user.id)
+    affiliation = db.scalar(select(Affiliation).where(Affiliation.user_id == user.id,
+        Affiliation.university_id == details.university_id, Affiliation.withdrawn.is_(False)))
+    if not affiliation:
+        affiliation = Affiliation(user_id=user.id, **details.model_dump(exclude={"email"}))
+        db.add(affiliation)
+        db.flush()
+        facts_changed(db, user.id)
+    proof = db.scalar(select(Verification).where(Verification.user_id == user.id,
+        Verification.school_affiliation_id == affiliation.id, Verification.verified_email == row.email,
+        Verification.verification_kind == "school"))
+    if proof:
+        proof.verified_at, proof.expires_at = now(), None
+    else:
+        db.add(Verification(user_id=user.id, school_affiliation_id=affiliation.id,
+                            university_domain_id=payload["domain_id"], verification_kind="school",
+                            verified_email=row.email))
+    return {"status": "verified", "user_id": user.id}
+
+
 @router.post("/auth/school-email-verifications/confirm")
 def school_confirm(body: TokenInput, db: DB, response: Response):
     return confirm_school(body.token, db, response)
@@ -227,14 +276,14 @@ def login_start(body: EmailInput, db: DB, mailer=Depends(get_mailer)):
     email = str(body.email).lower()
     user = db.scalar(select(User).where(User.login_email == email, User.account_status == "active"))
     # Deliver the same neutral message for unregistered addresses, avoiding account enumeration.
-    return challenge(db, email, "login", {}, mailer, user.id if user else None)
+    return challenge(db, email, "login", {}, mailer, user.id if user and not user.supabase_user_id else None)
 
 
 def confirm_login(token, db, response):
     row = consume(db, token, "login")
     user = db.get(User, row.user_id) if row.user_id else None
-    if not user or user.account_status != "active":
-        raise HTTPException(401, "학교 인증 후 로그인해 주세요.")
+    if not user or user.account_status != "active" or user.supabase_user_id:
+        raise HTTPException(401, "Google로 로그인하거나 기존 계정의 이메일을 확인해 주세요.")
     return issue_session(db, user.id, response)
 
 
@@ -255,23 +304,23 @@ def company_start(body: CompanyInput, db: DB, user: Actor, mailer=Depends(get_ma
     return challenge(db, str(body.email).lower(), "company", {"company_name": body.company_name}, mailer, user.id)
 
 
-def confirm_company(token, db):
-    row = consume(db, token, "company")
+def confirm_company(token, db, user):
+    row = consume(db, token, "company", user.id)
     db.add(Verification(user_id=row.user_id, verification_kind="company", verified_email=row.email,
                         company_name=row.payload["company_name"]))
     return {"status": "verified", "meaning": "회사 이메일 접근 확인. 직무·직급·과거 경력 인증과 다릅니다."}
 
 
 @router.post("/auth/company-email-verifications/confirm")
-def company_confirm(body: TokenInput, db: DB):
-    return confirm_company(body.token, db)
+def company_confirm(body: TokenInput, db: DB, user: Actor):
+    return confirm_company(body.token, db, user)
 
 
 @router.get("/auth/company-email-verifications/confirm")
-def company_confirm_legacy(token: str, db: DB):
+def company_confirm_legacy(token: str, db: DB, user: Actor):
     if get_settings().environment == "production":
         raise HTTPException(405, "화면의 이메일 확인 흐름을 이용해 주세요.")
-    return confirm_company(token, db)
+    return confirm_company(token, db, user)
 
 
 @router.get("/me/verifications")
@@ -299,6 +348,10 @@ def refresh(request: Request, response: Response, db: DB):
         .execution_options(synchronize_session=False))
     if consumed.rowcount != 1:
         raise HTTPException(401, "세션이 변경되었습니다.")
+    if row.auth_provider == "supabase":
+        from .supabase_auth import refresh_provider_session
+        db.refresh(row)
+        return refresh_provider_session(db, user, response, token, row)
     return issue_session(db, row.user_id, response, row.family_id)
 
 
@@ -309,7 +362,15 @@ def logout(request: Request, response: Response, db: DB):
         request.cookies.get("dudri_refresh", ""))))
     if row:
         db.execute(update(AuthSession).where(AuthSession.family_id == row.family_id).values(revoked=True))
+        bearer = request.headers.get("authorization", "").removeprefix("Bearer ")
+        if row.auth_provider == "supabase" and bearer and digest(bearer) == row.access_hash:
+            from .supabase_auth import provider_request
+            try:
+                provider_request("POST", "/logout?scope=local", token=bearer)
+            except HTTPException:
+                pass  # The local application session is still revoked if the provider is unavailable.
     response.delete_cookie("dudri_refresh", path="/api/v1/auth")
+    response.delete_cookie("dudri_oauth", path="/api/v1/auth")
 
 
 class UniversityInput(Input):

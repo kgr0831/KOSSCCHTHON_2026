@@ -2,7 +2,8 @@ export class ApiError extends Error {
   constructor(public status: number, message: string, public code = "") { super(message); }
 }
 
-const connectionMessage = "백엔드 서버에 연결하지 못했어요. start-local.bat 실행 창을 확인한 뒤 다시 연결해 주세요.";
+const localBrowser = typeof window !== "undefined" && ["localhost", "127.0.0.1", "[::1]"].includes(window.location.hostname);
+const connectionMessage = localBrowser ? "백엔드 서버에 연결하지 못했어요. start-local.bat 실행 창을 확인한 뒤 다시 연결해 주세요." : "서버에 연결하지 못했어요. 잠시 후 다시 연결해 주세요.";
 
 async function responseError(response: Response): Promise<ApiError> {
   const error = await response.json().catch(() => null);
@@ -15,20 +16,28 @@ async function responseError(response: Response): Promise<ApiError> {
 let accessToken: string | null = null;
 let refreshPromise: Promise<boolean> | null = null;
 let authGeneration = 0;
+let accessUserId: string | null = null;
 
-export function setAccessToken(value: string | null) { accessToken = value; authGeneration++; }
+export function setAccessToken(value: string | null, userId: string | null = null) { accessToken = value; accessUserId = userId; authGeneration++; }
+export function setSessionIdentity(userId: string) { accessUserId = userId; }
 
 export async function refreshSession(): Promise<boolean> {
   if (refreshPromise) return refreshPromise;
   const generation = authGeneration;
   refreshPromise = (async () => {
     try {
-      const response = await fetch("/api/v1/auth/refresh", { method: "POST", credentials: "same-origin", cache: "no-store", signal: AbortSignal.timeout(10_000) });
+      const response = await fetch("/api/v1/auth/refresh", { method: "POST", credentials: "same-origin", cache: "no-store", signal: AbortSignal.timeout(localBrowser ? 10_000 : 60_000) });
       if (response.status === 401) { if (generation === authGeneration) accessToken = null; return false; }
       if (!response.ok) throw await responseError(response);
       const result = await response.json();
       if (generation !== authGeneration) return false;
+      if (accessUserId && result.user_id && accessUserId !== result.user_id) {
+        accessToken = null; accessUserId = null; authGeneration++;
+        if (typeof window !== "undefined") window.dispatchEvent(new Event("dudri:session-changed"));
+        throw new ApiError(401, "다른 화면에서 로그인 계정이 변경되었어요. 현재 계정에서 다시 요청해 주세요.", "SESSION_CHANGED");
+      }
       accessToken = result.access_token;
+      accessUserId = result.user_id || accessUserId;
       return true;
     } catch (error) { throw error instanceof ApiError ? error : new ApiError(0, connectionMessage, "BACKEND_UNAVAILABLE"); }
     finally { refreshPromise = null; }
@@ -63,7 +72,7 @@ export type Page<T> = { items: T[]; next_cursor: string | null };
 export type Profile = { user_id: string; display_name: string; bio: string; avatar_url: string | null; name_is_public: boolean; bio_is_public: boolean; avatar_is_public: boolean; revision: number };
 export type Affiliation = { id: string; university_id: string; university_name: string; department: string; enrollment_status: string; entry_year: number | null; graduation_year: number | null; is_public: boolean; revision: number };
 export type Preference = { coffee_chat_available: boolean; project_available: boolean; learning_stage: string; activity_goal: string; hours_per_week: number | null; collaboration_mode: string; is_public: boolean; revision: number };
-export type UserSelf = { id: string; login_email: string; profile: Profile; school_affiliations: Affiliation[]; preferences: Preference; tags: UserTag[] };
+export type UserSelf = { id: string; login_email: string; google_connected?: boolean; profile: Profile; school_affiliations: Affiliation[]; preferences: Preference; tags: UserTag[] };
 export type UserTag = { id: string; tag_id: string; name: string; kind: string; usage: string; is_public: boolean };
 export type Career = { id: string; event_kind: string; title: string; organization_name: string; description: string; started_on: string | null; ended_on: string | null; is_public: boolean; revision: number };
 export type UserPublic = { id: string; display_name: string; bio?: string; avatar_url?: string; school_affiliations: Affiliation[]; career_events: Career[]; preferences?: Preference; tags: UserTag[]; verifications: { kind: string; meaning: string }[]; project_members: { id: string; project_title: string; role: string; contribution: string }[] };

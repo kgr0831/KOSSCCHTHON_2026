@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from "@tan
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { NavigationProvider } from "./app-navigation";
 import { FeedbackProvider } from "./feedback";
-import { api, ApiError, refreshSession, setAccessToken, type UserSelf } from "@/lib/api";
+import { api, ApiError, refreshSession, setAccessToken, setSessionIdentity, type UserSelf } from "@/lib/api";
 
 const AuthContext = createContext<{ user?: UserSelf; ready: boolean; connectionError: string; reconnect: () => void; login: (token: string) => Promise<void>; logout: () => Promise<void> }>({ ready: false, connectionError: "", reconnect: () => {}, login: async () => {}, logout: async () => {} });
 export const useAuth = () => useContext(AuthContext);
@@ -29,6 +29,7 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
         const identity = await api<UserSelf>("/me", {}, false);
         if (!active || generation !== epoch.current) return;
         client.setQueryData(["me"], identity);
+        setSessionIdentity(identity.id);
       }
       setAuthenticated(ok); setConnectionError(""); setReady(true);
     }).catch(error => {
@@ -37,9 +38,10 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
     return () => { active = false; };
   }, [client, reconnectAttempt]);
   const me = useQuery({ queryKey: ["me"], queryFn: () => api<UserSelf>("/me"), enabled: ready && authenticated, retry: false });
-  const login = useCallback(async (token: string) => { epoch.current++; client.clear(); setAccessToken(token); setAuthenticated(true); setReady(true); await client.fetchQuery({ queryKey: ["me"], queryFn: () => api<UserSelf>("/me") }); setConnectionError(""); }, [client]);
+  const login = useCallback(async (token: string) => { epoch.current++; client.clear(); setAccessToken(token); setAuthenticated(true); setReady(true); const identity = await client.fetchQuery({ queryKey: ["me"], queryFn: () => api<UserSelf>("/me") }); setSessionIdentity(identity.id); setConnectionError(""); }, [client]);
   const logout = useCallback(async () => { epoch.current++; await api("/auth/logout", { method: "POST" }); setAccessToken(null); client.clear(); setAuthenticated(false); setReady(true); }, [client]);
   const reconnect = useCallback(() => { epoch.current++; setReady(false); setAuthenticated(false); setReconnectAttempt(attempt => attempt + 1); }, []);
+  useEffect(() => { const changed = () => { client.clear(); reconnect(); }; window.addEventListener("dudri:session-changed", changed); return () => window.removeEventListener("dudri:session-changed", changed); }, [client, reconnect]);
   return <AuthContext.Provider value={{ user: ready && authenticated ? me.data : undefined, ready: ready && (!authenticated || !me.isPending), connectionError: connectionError || (me.error?.message ?? ""), reconnect, login, logout }}>{children}</AuthContext.Provider>;
 }
 

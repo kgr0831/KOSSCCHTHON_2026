@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     database_url: str = Field(default=LOCAL_DATABASE_URL, repr=False)
     app_origin: str = "http://localhost:3000"
     site_origin: str = "http://127.0.0.1:8001"
+    supabase_url: str = ""
+    supabase_publishable_key: str = Field(default="", repr=False)
     storage_path: Path = Path(".data/objects")
     mail_provider: Literal["smtp", "brevo"] = "smtp"
     mail_api_key: str = Field(default="", repr=False)
@@ -69,6 +71,16 @@ class Settings(BaseSettings):
         except Exception:
             pass
         raise ValueError("Use a PostgreSQL connection URI or a SQLite URL")
+
+    @field_validator("supabase_url")
+    @classmethod
+    def supabase_origin(cls, value):
+        if not value.strip():
+            return ""
+        origin = cls.canonical_origin(value)
+        if not origin.startswith("https://"):
+            raise ValueError("Supabase Auth requires an HTTPS origin")
+        return origin
 
     @model_validator(mode="after")
     def production_configuration(self):

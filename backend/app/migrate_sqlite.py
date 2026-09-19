@@ -4,7 +4,7 @@ import sqlite3
 from datetime import UTC
 from pathlib import Path
 
-from sqlalchemy import DateTime, create_engine, func, select
+from sqlalchemy import DateTime, create_engine, func, inspect, select
 
 from . import models  # noqa: F401 - register tables
 from .config import ROOT, get_settings
@@ -41,12 +41,18 @@ def copy_rows(source, target):
     if any(target.scalar(select(func.count()).select_from(table)) for table in tables):
         raise TransferError("Target already contains application data; nothing was copied. Use a new empty database.")
     expected = counts(source)
+    source_schema = inspect(source)
     deferred = []
     for table in tables:
         if table.name in SKIPPED:
             continue
         # Do not even read worker lease tokens or external credential records.
-        columns = [column for column in table.c if not (table.name == "jobs" and column.name == "lease_token")]
+        available = {column["name"] for column in source_schema.get_columns(table.name)}
+        missing = [column for column in table.c if column.name not in available]
+        if any(not column.nullable and column.default is None and column.server_default is None for column in missing):
+            raise TransferError("Source schema is missing required fields; nothing was copied.")
+        columns = [column for column in table.c if column.name in available
+                   and not (table.name == "jobs" and column.name == "lease_token")]
         result = source.execute(select(*columns)).mappings()
         while batch := result.fetchmany(100):
             rows = []
