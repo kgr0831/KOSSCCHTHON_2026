@@ -23,3 +23,9 @@ services:
         value: https://ai.cs.kookmin.ac.kr/v1
       - key: DUDRI_CREDENTIAL_ENCRYPTION_KEY
         generateValue: true
+      - key: DUDRI_MAIL_PROVIDER
+        value: brevo
+      - key: DUDRI_MAIL_API_KEY
+        sync: false
+      - key: DUDRI_SMTP_SENDER
+        sync: false

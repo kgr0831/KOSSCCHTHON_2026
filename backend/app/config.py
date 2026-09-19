@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     app_origin: str = "http://localhost:3000"
     site_origin: str = "http://127.0.0.1:8001"
     storage_path: Path = Path(".data/objects")
+    mail_provider: Literal["smtp", "brevo"] = "smtp"
+    mail_api_key: str = Field(default="", repr=False)
     smtp_host: str = ""
     smtp_port: int = 587
     smtp_username: str = ""
@@ -75,8 +77,9 @@ class Settings(BaseSettings):
         if self.environment == "production":
             if not self.database_url.startswith("postgresql"):
                 raise ValueError("Production requires PostgreSQL")
-            if self.service_role != "sites" and (not self.credential_encryption_key or not self.smtp_host or not self.smtp_sender):
-                raise ValueError("Production app requires credential encryption and SMTP host/sender configuration")
+            mail_configured = bool(self.smtp_sender and (self.smtp_host if self.mail_provider == "smtp" else self.mail_api_key))
+            if self.service_role != "sites" and (not self.credential_encryption_key or not mail_configured):
+                raise ValueError("Production app requires credential encryption and SMTP or HTTPS mail configuration")
             if not self.site_origin.startswith("https://") or (self.service_role != "sites" and not self.app_origin.startswith("https://")):
                 raise ValueError("Production origins must use HTTPS")
         return self

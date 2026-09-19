@@ -111,7 +111,7 @@ uv run --directory backend python ../scripts/verify_launcher.py
 
 디자인 예시 이미지를 다시 만들려면 `uv run --directory backend python ../scripts/generate_style_previews.py`, 이어서 `node frontend/scripts/render-style-previews.mjs`를 실행하세요. 렌더링에는 Edge가 필요합니다.
 
-실제 학교 이메일 인증에는 `.env`의 SMTP 설정이 필요합니다. 로컬 체험에는 SMTP가 필요 없습니다. Figma 댓글별 반영은 [디자인 기록](docs/design/README.md), 전체 Architecture 범위의 남은 항목은 [구현 기록](IMPLEMENTATION.md)을 참고하세요.
+실제 이메일 인증에는 `.env`의 SMTP 또는 HTTPS 메일 설정이 필요합니다. Brevo는 `DUDRI_MAIL_PROVIDER=brevo`, `DUDRI_MAIL_API_KEY`, 인증된 발신 주소인 `DUDRI_SMTP_SENDER`를 사용합니다. 키는 서버에서만 읽으며 로컬 체험에는 메일 설정이 필요 없습니다. Figma 댓글별 반영은 [디자인 기록](docs/design/README.md), 전체 Architecture 범위의 남은 항목은 [구현 기록](IMPLEMENTATION.md)을 참고하세요.
 
 ## 배포 준비 상태
 
@@ -119,6 +119,6 @@ uv run --directory backend python ../scripts/verify_launcher.py
 
 Vercel 프로젝트 루트는 `frontend`로 지정하고 `API_ORIGIN`과 `DUDRI_SITE_ORIGIN`을 Render 공개 URL로 설정합니다. Render에는 `DUDRI_APP_ORIGIN`으로 Vercel의 고정 배포 주소를 설정합니다. 인증 쿠키는 프런트 도메인의 API 프록시에서만 사용하고 생성 코드는 별도 출처의 sandbox iframe에서 실행합니다.
 
-유료 플랜·무료 체험 후 자동 유료 전환은 사용하지 않습니다. Render 무료 서비스는 유휴 시 절전되므로 첫 요청에 시간이 걸리고, 작업은 재기동 후 DB에서 복구합니다. 일반 SMTP 포트가 차단되어 HTTPS 메일 발송 서비스 연결이 필요합니다. 플랫폼별 무료 사용량을 넘기지 않도록 결제 수단·추가 과금 설정을 확인해야 합니다.
+유료 플랜·무료 체험 후 자동 유료 전환은 사용하지 않습니다. Render 무료 서비스는 유휴 시 절전되므로 첫 요청에 시간이 걸리고, 작업은 재기동 후 DB에서 복구합니다. 일반 SMTP 포트가 차단되어 Brevo 무료 HTTPS 메일 발송을 연결했습니다. 계정 인증·발신자 설정과 연결 확인 메일의 배달을 검증했으며, 학교 인증 링크의 실제 사용 검증은 남아 있습니다. 플랫폼별 무료 사용량을 넘기지 않도록 결제 수단·추가 과금 설정을 확인해야 합니다.
 
 실제 배포·공개 URL 검증, Google Supabase Auth, 로그인 후 별도 학교 이메일 인증은 아직 미완료입니다. 현재 파일이 있다는 사실만으로 배포나 인증이 완료된 것은 아닙니다.

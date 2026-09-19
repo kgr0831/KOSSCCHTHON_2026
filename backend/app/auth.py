@@ -6,6 +6,7 @@ from datetime import timedelta
 from email.message import EmailMessage
 from typing import Annotated, Literal
 
+import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from sqlalchemy import func, select, update
@@ -40,7 +41,7 @@ def digest(token: str) -> str:
 class Mailer:
     def send(self, email: str, purpose: str, token: str):
         settings = get_settings()
-        if not settings.smtp_host or not settings.smtp_sender:
+        if not settings.smtp_sender or not (settings.smtp_host if settings.mail_provider == "smtp" else settings.mail_api_key):
             raise HTTPException(503, "이메일 발송 서비스가 아직 설정되지 않았습니다.")
         message = EmailMessage()
         message["From"] = settings.smtp_sender
@@ -50,6 +51,18 @@ class Mailer:
         message.set_content(f"두드리에서 요청한 이메일 확인입니다.\n\n"
                             f"{settings.app_origin}/auth/confirm#purpose={purpose}&token={token}\n\n"
                             "15분 안에 한 번만 사용할 수 있습니다. 본인이 요청하지 않았다면 무시해 주세요.")
+        if settings.mail_provider == "brevo":
+            try:
+                result = httpx.post("https://api.brevo.com/v3/smtp/email", timeout=15, follow_redirects=False,
+                                    headers={"api-key": settings.mail_api_key},
+                                    json={"sender": {"name": "두드리", "email": settings.smtp_sender},
+                                          "to": [{"email": email}], "subject": str(message["Subject"]),
+                                          "textContent": message.get_content()})
+                result.raise_for_status()
+            except httpx.HTTPError:
+                # Provider bodies can include recipients or credentials. Never echo them.
+                raise HTTPException(503, "인증 메일을 보내지 못했습니다. 무료 발송 한도와 메일 연결 설정을 확인해 주세요.") from None
+            return
         try:
             with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=15) as smtp:
                 if settings.smtp_starttls:
