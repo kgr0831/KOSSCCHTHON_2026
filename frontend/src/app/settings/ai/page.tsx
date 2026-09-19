@@ -53,6 +53,7 @@ function SettingsForm({ initial, providers }: { initial: Settings; providers?: P
     <Field label="연결 방식"><select value={form.transport} disabled={busy} onChange={e => { setSaved(false); setForm({ ...form, transport: e.target.value }); }}>
       <option value="api">서버 API</option><option disabled={!allowed} value="cli">PC 전용 · 구독 CLI</option><option disabled={!allowed} value="hybrid">PC 전용 · 가벼운 작업은 API, 복잡한 작업은 CLI</option>
     </select></Field>
+    {!allowed && <p className="notice" role="status"><strong>CLI·혼합 연결은 이 배포 웹에서 선택할 수 없어요.</strong> <code>start-local.bat</code>로 연 <code>http://localhost:3000</code>에서 선택하고 연결을 확인해 주세요.</p>}
     {form.transport !== "cli" && <>
       <p className="notice">{providers?.api.configured ? "서버 API가 설정돼 있어요." : "서버 API 설정이 필요해요. PC 실행 시 루트 .env의 DUDRI_AI_API_KEY를 설정해 주세요."}</p>
       {providers?.api.error && <p className="notice error">{providers.api.error}</p>}

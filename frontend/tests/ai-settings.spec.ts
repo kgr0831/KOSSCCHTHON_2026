@@ -37,6 +37,7 @@ for (const allowed of [true, false]) {
       await expect(page.getByRole("button", { name: "Codex 연결 확인" })).toHaveCount(0);
       await expect(page.getByRole("combobox", { name: "연결 방식", exact: true }).locator('option[value="cli"]')).toHaveJSProperty("disabled", true);
       await expect(page.getByRole("combobox", { name: "연결 방식", exact: true }).locator('option[value="hybrid"]')).toHaveJSProperty("disabled", true);
+      await expect(page.getByRole("status").filter({ hasText: "CLI·혼합 연결은 이 배포 웹에서 선택할 수 없어요." })).toBeVisible();
       await expect(page.getByText("배포 웹에서는 저장된 기록만 볼 수 있어요.", { exact: false })).toBeVisible();
     }
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
