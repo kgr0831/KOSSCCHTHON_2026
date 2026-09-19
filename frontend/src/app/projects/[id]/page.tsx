@@ -1,0 +1,22 @@
+"use client";
+
+import { useState } from "react";
+import Link from "next/link";
+import { useParams } from "@/components/app-navigation";
+import { useQuery } from "@tanstack/react-query";
+import { api, statusText, type Page, type Project, type Recruitment } from "@/lib/api";
+import { useCommand } from "@/lib/hooks";
+import { useAuth } from "@/components/providers";
+import { AuthGate, ErrorMessage, Field, Loading, PageHeading } from "@/components/ui";
+
+export default function ProjectPage() { const { id } = useParams<{ id: string }>(); return <AuthGate><Detail id={id} /></AuthGate>; }
+function Detail({ id }: { id: string }) {
+  const { user } = useAuth(), command = useCommand(), [message, setMessage] = useState(""), [opening, setOpening] = useState("");
+  const project = useQuery({ queryKey: ["project", id], queryFn: () => api<Project>(`/projects/${id}`) });
+  const mine = project.data?.creator_id === user?.id;
+  const posts = useQuery({ queryKey: ["project-posts", id, mine], queryFn: () => api<Page<Recruitment>>(`/recruitment-posts?limit=100${mine ? "&mine=true" : ""}`), enabled: !!project.data });
+  if (project.isPending) return <Loading />;
+  if (!project.data) return <ErrorMessage error={project.error} />;
+  const p = project.data, list = posts.data?.items.filter(x => x.project_id === id) || [];
+  return <><PageHeading eyebrow="PROJECT STORY" title={p.title} description={p.summary} action={<Link className="button subtle" href="/projects">프로젝트 목록</Link>} /><div className="grid-2"><section className="panel stack"><div className="tag-list"><span className="badge purple">{statusText[p.project_status]}</span><span className="badge gray">{statusText[p.visibility]}</span><span className="badge">팀원 {p.member_count || 1}명</span></div><h2>함께 이루고 싶은 목표</h2><p>{p.goal || "함께 목표를 구체화하고 있어요."}</p>{mine && <><h2>공개 범위</h2><p className="muted">모집 글을 게시하려면 프로젝트를 먼저 공개해 주세요. 비공개로 전환하면 모집 게시도 중지됩니다.</p><button className="button subtle" disabled={command.isPending} onClick={() => command.mutate({ path: `/projects/${id}`, method: "PATCH", body: { revision: p.revision, title: p.title, summary: p.summary, goal: p.goal, project_status: p.project_status, visibility: p.visibility === "public" ? "private" : "public" } })}>{p.visibility === "public" ? "비공개로 전환" : "프로젝트 공개"}</button></>}</section><div className="stack">{list.map(post => <section className="panel stack" key={post.id}><div className="section-title"><h2>동료를 찾고 있어요</h2><span className="badge purple">{statusText[post.status]}</span></div><p className="card-description">{post.description}</p><p className="muted">{statusText[post.collaboration_mode]} · {post.duration || "기간 협의"}{post.hours_per_week ? ` · 주 ${post.hours_per_week}시간` : ""}</p>{post.role_openings.map(r => <div className="role-summary" key={r.id}><strong>{r.role}</strong><span>{r.filled}/{r.capacity}명</span><small>{r.skills.join(" · ")}</small></div>)}{mine ? <div className="card-actions">{post.status !== "published" ? <button className="button primary" disabled={command.isPending || p.visibility !== "public"} onClick={() => command.mutate({ path: `/recruitment-posts/${post.id}/publish`, body: { revision: post.revision } })}>이 모집 글 게시</button> : <button className="button subtle" disabled={command.isPending} onClick={() => command.mutate({ path: `/recruitment-posts/${post.id}`, method: "PATCH", body: { revision: post.revision, description: post.description, hours_per_week: post.hours_per_week, collaboration_mode: post.collaboration_mode, duration: post.duration, status: "closed" } })}>모집 마감</button>}</div> : post.status === "published" && <form className="stack" onSubmit={e => { e.preventDefault(); command.mutate({ path: `/recruitment-posts/${post.id}/applications`, idempotent: true, body: { opening_id: opening, message } }); }}><Field label="참여하고 싶은 역할"><select required value={opening} onChange={e => setOpening(e.target.value)}><option value="">역할 선택</option>{post.role_openings.filter(x => x.filled < x.capacity).map(x => <option key={x.id} value={x.id}>{x.role}</option>)}</select></Field><Field label="팀에게 전할 이야기"><textarea required rows={4} value={message} maxLength={5000} onChange={e => setMessage(e.target.value)} /></Field><button className="button primary" disabled={command.isPending}>참여 신청</button></form>}</section>)}{!list.length && <section className="panel"><p className="muted">현재 표시할 모집 글이 없습니다.</p></section>}</div></div><ErrorMessage error={posts.error || command.error} />{command.isSuccess && <p className="notice" role="status">변경 사항을 저장했어요.</p>}</>;
+}
