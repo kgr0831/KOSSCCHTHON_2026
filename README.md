@@ -58,6 +58,8 @@ start-local.bat --import-sqlite
 
 입력 오류와 저장 전 화면 이동은 앱 대화상자로 안내합니다. 프로필 소개 및 문서 편집 초안은 같은 탭의 새로고침에서 복구합니다. 정식 저장은 서버 DB에 남으며, 탭을 닫기 전에는 저장 버튼을 눌러 주세요.
 
+메뉴·버튼 등 UI 글자 선택과 이미지·링크 드래그는 막습니다. 코드·입력창·자기소개 등 내용 영역은 선택·복사할 수 있고, 페이지 및 영역 스크롤은 유지합니다.
+
 ## AI와 비밀 설정
 
 `token.txt`의 키를 루트 `.env`의 `DUDRI_AI_API_KEY`로 옮긴 뒤 `token.txt`는 삭제했습니다. 키는 서버에서만 읽습니다. `.env`, `.env.*`, `token.txt`, `.runtime/`, `.data/`는 Git에서 제외되며, 실제 비밀 값이 없는 `.env.example`만 공유합니다. SMTP 비밀번호·GitHub secret·암호화 키도 같은 `.env`에서 설정합니다. 키 변경 후에는 실행 터미널을 다시 시작하세요.
@@ -68,13 +70,15 @@ start-local.bat --import-sqlite
 - 간단한 초안·질문·검색 조건·자료 분석: **Gemini Flash 우선**. 현재 국민대 제공 목록에는 Flash가 없어, 사용자가 허용한 **Claude Haiku**를 사용합니다.
 - 실패한 AI 응답을 더미 생성물로 바꾸지 않습니다. 오류와 입력을 유지하고 새 버전으로 재시도합니다.
 
-`마이 → AI 연결 설정`에서 API, 공식 CLI, 혼합(API + Claude CLI)을 선택할 수 있습니다. 구독 CLI는 해당 제공자의 로그인과 사용량 제한을 따릅니다.
+`마이 → AI 연결 설정`에서 API, **PC 전용 CLI**, 혼합(가벼운 작업은 API, 복잡한 작업은 선택한 CLI)을 선택할 수 있습니다. **CLI 기본 제공자는 Codex이며 Claude도 지원**합니다. 구독 CLI는 해당 제공자의 로그인과 사용량 제한을 따릅니다.
 
-현재 운영 모드는 API를 사용합니다. 여러 사용자가 서버의 구독 CLI 세션을 공유하지 않도록 제한하며, 배포 환경의 사용자별 구독 연결은 아직 미구현입니다.
+사용자가 확정한 범위에 따라 **CLI는 PC에서 BAT로 실행할 때만 사용**합니다. 배포 웹은 API로 생성하며 저장된 CLI 연결 기록만 표시합니다. 클라우드에서 PC의 CLI를 호출하는 프록시는 사용하지 않습니다. PC에서 접수한 작업은 해당 PC의 worker만 처리합니다.
 
-실행 터미널에서 `C`는 Claude 로그인, `G`는 Gemini 로그인을 엽니다. Gemini는 `.runtime/cli-home/gemini`의 전용 공간에서 로그인한 후 `/quit`으로 돌아옵니다. 앱은 다른 도구의 인증 파일을 읽거나 복사하지 않습니다. 생성 시 도구·MCP·확장 접근을 제한하고 프롬프트를 셸 문자열에 넣지 않습니다. CLI 인증 파일은 CLI가 직접 관리하며 Git에서 제외됩니다.
+실행 터미널에서 `X`는 Codex, `C`는 Claude 로그인을 엽니다. 로그인 후 설정 화면에서 **연결 확인 → 모델 선택 → 연결 설정 저장**을 진행합니다. DB에는 실행 경로·계정 이메일·마지막 로그인 확인 상태·모델·확인 PC와 시각만 저장합니다. 로그인 확인은 구독 잔여량이나 생성 권한 보장을 뜻하지 않습니다. 다른 PC 또는 CLI 계정으로 바뀌면 다시 연결을 확인해야 합니다.
 
-공식 설명: [Claude headless](https://code.claude.com/docs/en/headless), [Gemini headless](https://geminicli.com/docs/cli/headless/).
+앱은 공식 상태 명령(Codex app-server의 account/read·model/list, Claude auth status)으로 메타데이터만 조회합니다. DB에 저장된 경로를 명령으로 실행하지 않고 현재 PC에서 탐지한 CLI만 사용합니다. 인증 파일은 각 CLI가 직접 관리하며 앱은 읽거나 복사하지 않습니다. 생성은 임시 작업 폴더에서 도구·MCP·확장 접근과 세션 저장을 제한하고 프롬프트를 stdin으로 전달합니다. 기존 Gemini 로그인 단축키 `G`는 유지합니다.
+
+공식 설명: [Codex 비대화형 실행](https://learn.chatgpt.com/docs/non-interactive-mode), [Codex 계정·모델 조회](https://learn.chatgpt.com/docs/app-server), [Claude CLI](https://code.claude.com/docs/en/cli-reference).
 
 ## 저장·편집·공개
 
@@ -92,13 +96,14 @@ HTML 다운로드는 스크립트를 제외한 정적 문서입니다. 브라우
 
 2026-09-20 Windows/Edge 기준:
 
-- 백엔드 테스트 41개 통과. 별도 환경이 필요한 PostgreSQL 테스트는 기본 실행에서 1개 생략하며, 로컬 PostgreSQL 17.11에서 따로 실행하여 통과했습니다. TypeScript와 변경된 실행 스크립트의 Ruff·PowerShell 구문 검사도 통과했습니다.
-- Playwright 25개: 320–1440px 반응형·낮은 PC 사이드바·메뉴·주소 유지·로그인·MD 업로드·캘린더·저장본 편집·팝업 중앙 정렬·스타일 폼 저장·외부 iframe 이동 차단·계정 변경 중 요청 재전송 방지.
+- 백엔드 테스트 62개 통과. PostgreSQL 전용 테스트 1개는 기본 실행에서 생략하며, 이전 인증 변경은 Linux CI의 실제 PostgreSQL·컨테이너 검사를 통과했습니다. 최신 CLI 변경의 PG 검사는 후속 CI에서 확인합니다. TypeScript와 Ruff 검사도 통과했습니다.
+- 기존 Playwright 전체 29개 통과 기록: 320–1440px 반응형·낮은 PC 사이드바·메뉴·로그인·저장본 편집·스타일 폼·팝업 중앙 정렬·계정 전환 경계·OAuth 복귀. CLI 변경에는 PC/배포 설정 화면 검사를 추가했습니다.
 - 새 Supabase에 원본의 128개 레코드를 이전하고 전체 필드 일치, RLS·역할 권한, 앱 API 저장·재조회·소유권 경계를 검증했습니다. 원본 SQLite는 보존했습니다.
 - 비밀값 없는 별도 폴더에서 개발 도구 PATH 없이 시작, 중단된 Node 설치 복구, 중복 BAT 재사용과 실행 중 환경 보존을 검증했습니다. 완전히 초기화한 다른 PC의 실기기 검증은 별도로 남습니다.
 - 실제 로컬 더미 로그인, 새 화면 6종의 모바일·PC API 연동, 실제 생성본 표시 확인.
 - 국민대 API 인증, Haiku 초안, Sonnet 포트폴리오·CV 생성 및 DB 저장 성공. 더미 김민준 계정의 각 문서 최신 버전에서 실제 생성 예시를 볼 수 있습니다.
-- Claude CLI 설치·옵션 확인. 이 PC는 Claude CLI 로그인이 필요하므로 구독 계정의 실제 생성 성공까지 확인한 상태는 아닙니다.
+- Codex CLI 0.155.1에서 공식 계정·모델 조회와 기본 모델 gpt-5.6-sol의 실제 짧은 JSON 응답 생성 성공. Claude 어댑터도 유지하지만 사용자의 구독 해지로 현재 Claude 생성 성공은 확인하지 않습니다.
+- 실제 배포에서 Google 로그인·로그아웃·재로그인, 다른 학교 이메일로 같은 계정의 숭실대 인증, Sonnet 포트폴리오 생성과 DB 저장을 확인했습니다. 문서는 비공개 상태입니다.
 
 ```powershell
 uv run --directory backend pytest -q
@@ -123,6 +128,6 @@ Google 로그인은 `DUDRI_SUPABASE_URL`과 `DUDRI_SUPABASE_PUBLISHABLE_KEY`를 
 
 Vercel 프로젝트 루트는 `frontend`로 지정하고 `API_ORIGIN`과 `DUDRI_SITE_ORIGIN`을 Render 공개 URL로 설정합니다. Render에는 `DUDRI_APP_ORIGIN`으로 Vercel의 고정 배포 주소를 설정합니다. 인증 쿠키는 프런트 도메인의 API 프록시에서만 사용하고 생성 코드는 별도 출처의 sandbox iframe에서 실행합니다.
 
-유료 플랜·무료 체험 후 자동 유료 전환은 사용하지 않습니다. Render 무료 서비스는 유휴 시 절전되므로 첫 요청에 시간이 걸리고, 작업은 재기동 후 DB에서 복구합니다. 일반 SMTP 포트가 차단되어 Brevo 무료 HTTPS 메일 발송을 연결했습니다. 계정 인증·발신자 설정과 연결 확인 메일의 배달을 검증했으며, 학교 인증 링크의 실제 사용 검증은 남아 있습니다. 플랫폼별 무료 사용량을 넘기지 않도록 결제 수단·추가 과금 설정을 확인해야 합니다.
+유료 플랜·무료 체험 후 자동 유료 전환은 사용하지 않습니다. Render 무료 서비스는 유휴 시 절전되므로 첫 요청에 시간이 걸리고, 서버 작업은 재기동 후 DB에서 복구합니다. Brevo 무료 HTTPS 발송을 연결하고 실제 숭실대 인증 메일 수신·링크 확인을 완료했습니다. 메일이 보이지 않으면 스팸메일함도 확인해 주세요. PC 작업은 요청한 PC의 BAT를 다시 실행하면 복구합니다.
 
-현재 앱은 https://dudri-app.vercel.app , API·공개 문서 제공기는 https://dudri-api.onrender.com 에 무료 배포했습니다. 공개 화면·API 프록시·Supabase health와 비로그인 접근 차단을 확인했습니다. Google 로그인과 로그인 후 별도 학교 이메일 인증 코드는 추가했으며, 이 인증 변경의 운영 배포·실제 로그인·학교 메일 확인은 아직 검증 중입니다.
+현재 앱은 https://dudri-app.vercel.app , API·공개 문서 제공기는 https://dudri-api.onrender.com 에 무료 배포했습니다. 공개 화면·API 프록시·Supabase health·비로그인 접근 차단·Google 운영 로그인·별도 학교 인증·AI 문서 저장을 확인했습니다. 개인정보 안내는 앱의 /privacy.html에 게시했습니다. 지원 도메인은 순천향대 sch.ac.kr, 국민대 kookmin.ac.kr, 숭실대 soongsil.ac.kr입니다.

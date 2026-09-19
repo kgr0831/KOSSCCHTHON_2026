@@ -70,20 +70,23 @@ def cli_command(family: str) -> list[str] | None:
     if family == "claude":
         path = shutil.which("claude.exe") or shutil.which("claude")
         return [path] if path else None
+    packages = {"codex": "@openai/codex", "gemini": "@google/gemini-cli"}
+    if family not in packages:
+        return None
     node = shutil.which("node")
     # Invoke the installed JS entry point directly; never interpolate prompts into cmd.
-    for base in [Path(os.environ.get("APPDATA", "")) / "npm", Path(shutil.which("gemini") or ".").parent]:
-        package = base / "node_modules/@google/gemini-cli"
+    for base in [Path(os.environ.get("APPDATA", "")) / "npm", Path(shutil.which(family) or ".").parent]:
+        package = base / "node_modules" / packages[family]
         manifest = package / "package.json"
         if manifest.is_file() and node:
             try:
                 info = json.loads(manifest.read_text(encoding="utf-8"))
-                entry = (package / info["bin"]["gemini"]).resolve()
+                entry = (package / info["bin"][family]).resolve()
                 if entry.is_relative_to(package.resolve()) and entry.is_file():
                     return [node, str(entry)]
             except (ValueError, KeyError, TypeError):
                 pass
-    path = shutil.which("gemini")
+    path = shutil.which(family)
     return [path] if path and Path(path).suffix not in (".cmd", ".ps1", ".bat") else None
 
 
@@ -102,8 +105,9 @@ def parse_json(raw: str) -> dict:
 
 
 class AIProvider:
-    def __init__(self, transport="api", easy_model="", hard_model=""):
+    def __init__(self, transport="api", easy_model="", hard_model="", cli_provider="codex", cli_model="", cli_connection=None):
         self.transport, self.easy_model, self.hard_model = transport, easy_model, hard_model
+        self.cli_provider, self.cli_model, self.cli_connection = cli_provider, cli_model, cli_connection
         self.last_model = ""
 
     def generate(self, instruction: str, inputs: dict, schema: type[BaseModel], complexity="easy") -> BaseModel:
@@ -147,21 +151,39 @@ class AIProvider:
             raise HTTPException(502, "AI 제공자가 응답하지 않았습니다. 입력은 저장되어 있어요. 모델 설정을 확인하거나 다시 시도해 주세요.") from None
 
     def _cli(self, system, inputs, complexity):
-        if get_settings().environment == "production":
+        from .local_runtime import cli_allowed
+
+        if get_settings().environment == "production" or not cli_allowed():
             raise HTTPException(403, "배포 서버에서는 서버 API 연결을 사용해 주세요. 구독 CLI는 로컬 실행에서 사용할 수 있어요.")
-        family = "claude" if complexity == "hard" else "gemini"
+        family = self.cli_provider
         command = cli_command(family)
         if not command:
             raise HTTPException(503, f"{family} CLI를 설치하고 해당 CLI에서 로그인해 주세요.")
+        from .cli_metadata import probe_cli
+
+        current = probe_cli(family)
+        linked = self.cli_connection
+        if not linked or current["status"] != "connected" or not current["account_email"] or any(
+            current[key] != linked.get(key) for key in ("account_email", "executable_path", "device_id")
+        ):
+            raise HTTPException(409, "이 PC의 CLI 연결을 AI 설정에서 다시 확인해 주세요. 로그인 계정이 바뀌었을 수 있어요.")
+        self.last_model = self.cli_model or current["default_model"]
+        if self.last_model not in current["models"]:
+            raise HTTPException(422, "이 CLI 계정에서 사용할 모델을 다시 선택해 주세요.")
         # CLI reads its own subscription login. The application never reads/copies sessions.
         env = cli_environment(family)
         root = get_settings().project_root / ".runtime/cli"
         root.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="request-", dir=root) as folder:
             if family == "claude":
-                self.last_model = "sonnet"
-                command += ["--print", "--output-format", "json", "--model", "sonnet", "--tools", "",
+                command += ["--print", "--output-format", "json", "--model", self.last_model, "--tools", "",
                             "--safe-mode", "--strict-mcp-config", "--no-session-persistence"]
+            elif family == "codex":
+                from .cli_metadata import codex_config
+
+                command += ["exec", "--ignore-user-config", "--ignore-rules", "--ephemeral",
+                            "--skip-git-repo-check", "--sandbox", "read-only", "--color", "never",
+                            "--model", self.last_model, *codex_config(), "-"]
             else:
                 self.last_model = "gemini-2.5-flash"
                 policy = Path(folder) / "deny-tools.toml"
@@ -183,6 +205,8 @@ class AIProvider:
                     raise HTTPException(504, "CLI 응답 시간이 초과되었습니다. 저장된 작업에서 다시 시도할 수 있어요.") from None
                 if process.returncode:
                     raise HTTPException(503, f"{family} CLI 로그인 또는 사용량을 확인해 주세요. CLI 오류 원문은 표시하지 않습니다.")
+                if family == "codex":
+                    return output
                 wrapper = parse_json(output)
                 if wrapper.get("is_error") or wrapper.get("error"):
                     raise HTTPException(503, f"{family} CLI를 해당 터미널에서 로그인한 뒤 다시 시도해 주세요.")
@@ -197,7 +221,12 @@ def provider_for(db, user_id):
     row = db.get(AISettings, user_id)
     if get_settings().environment == "production":
         return AIProvider("api", row.easy_model if row else "", row.hard_model if row else "")
-    return AIProvider(row.transport, row.easy_model, row.hard_model) if row else AIProvider()
+    if not row:
+        return AIProvider()
+    from .local_runtime import device_id
+    linked = next((x for x in row.cli_connections if x.get("device_id") == device_id()
+                   and x.get("provider") == row.cli_provider), None)
+    return AIProvider(row.transport, row.easy_model, row.hard_model, row.cli_provider, row.cli_model, linked)
 
 
 # Keep a dependency boundary for tests and existing callers.
@@ -208,9 +237,12 @@ def get_ai(db: DB, user: Actor):
 
 def cli_environment(family):
     env = dict(os.environ)
+    for name in list(env):
+        if name.startswith(("DUDRI_", "KOSS_")):
+            env.pop(name)
     for name in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN",
                  "GEMINI_API_KEY", "GOOGLE_API_KEY", "KOSS_AI_API_KEY", "DUDRI_AI_API_KEY",
-                 "GOOGLE_APPLICATION_CREDENTIALS", "CLOUDSDK_AUTH_ACCESS_TOKEN"):
+                 "GOOGLE_APPLICATION_CREDENTIALS", "CLOUDSDK_AUTH_ACCESS_TOKEN", "OPENAI_API_KEY", "CODEX_API_KEY"):
         env.pop(name, None)
     env["NO_COLOR"] = "1"
     if family == "gemini":

@@ -19,6 +19,39 @@ async function fixtures(page: Page) {
   });
 }
 
+test("UI text and images do not drag while code and introductions stay selectable", async ({ page }) => {
+  await fixtures(page);
+  await page.goto("/studio");
+  const heading = page.getByRole("heading", { name: "나를 담는 AI 스튜디오" });
+  await expect(heading).toBeVisible();
+  expect(await heading.evaluate(el => getComputedStyle(el).userSelect)).toBe("none");
+  const headingBox = (await heading.boundingBox())!;
+  await page.mouse.move(headingBox.x + 2, headingBox.y + headingBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(headingBox.x + headingBox.width - 2, headingBox.y + headingBox.height / 2, { steps: 8 });
+  await page.mouse.up();
+  expect(await page.evaluate(() => window.getSelection()?.toString())).toBe("");
+  const image = page.locator(".style-card img").first();
+  expect(await image.evaluate(el => !el.dispatchEvent(new DragEvent("dragstart", { bubbles: true, cancelable: true })))).toBe(true);
+  await page.getByText("AI에 전달할 공개 프로필 확인", { exact: true }).click();
+  const bio = page.getByText("Public facts", { exact: true });
+  await bio.scrollIntoViewIfNeeded();
+  expect(await bio.evaluate(el => getComputedStyle(el).userSelect)).toBe("text");
+  const bioBox = (await bio.boundingBox())!;
+  await page.mouse.move(bioBox.x + 1, bioBox.y + bioBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(bioBox.x + bioBox.width - 1, bioBox.y + bioBox.height / 2, { steps: 8 });
+  await page.mouse.up();
+  expect(await page.evaluate(() => window.getSelection()?.toString())).toContain("Public facts");
+  expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+  await page.getByRole("button", { name: /버전 1/ }).click();
+  await page.getByRole("button", { name: "코드", exact: true }).click();
+  const editor = page.getByRole("textbox", { name: "HTML 편집" });
+  await editor.click();
+  await editor.press("ControlOrMeta+A");
+  expect(await editor.evaluate((el: HTMLTextAreaElement) => el.selectionEnd - el.selectionStart)).toBe(code.html.length);
+});
+
 for (const width of [390, 1440]) {
   test(`style references and saved editor at ${width}`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height: 1000 });

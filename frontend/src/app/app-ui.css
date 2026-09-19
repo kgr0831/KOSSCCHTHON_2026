@@ -1,4 +1,9 @@
 /* Persistent app chrome; only the document canvas scrolls. */
+/* App controls cannot be selected; authored text and editors remain copyable. */
+body { -webkit-user-select:none; user-select:none; }
+:where(input,textarea,[contenteditable="true"],[contenteditable="plaintext-only"],pre,code,.code-box,.card-description,[data-selectable]),
+:where(pre,code,.code-box,.card-description,[data-selectable]) * { -webkit-user-select:text; user-select:text; }
+img,svg { -webkit-user-select:none; user-select:none; -webkit-user-drag:none; }
 html { scrollbar-gutter:stable; }
 .app-shell { min-height:100dvh; }
 .main-frame { min-height:100dvh; display:flex; flex-direction:column; }

@@ -170,7 +170,7 @@ def main():
         if not args.no_browser:
             open_browser(url)
         print("[local] Close this terminal or press Ctrl+C to stop all owned services.", flush=True)
-        print("[local] Press C for Claude subscription login, G for isolated Gemini login.", flush=True)
+        print("[local] PC-only CLI: X for Codex login (default), C for Claude, G for Gemini.", flush=True)
         while True:
             if any(p.poll() is not None for p in children):
                 raise RuntimeError("A service stopped. Stopping its companion services.")
@@ -178,8 +178,8 @@ def main():
                 import msvcrt
                 if msvcrt.kbhit():
                     key = msvcrt.getwch().lower()
-                    if key in ("c", "g"):
-                        subprocess.run([sys.executable, "-m", "app.cli_login", "claude" if key == "c" else "gemini"],
+                    if key in ("x", "c", "g"):
+                        subprocess.run([sys.executable, "-m", "app.cli_login", {"x": "codex", "c": "claude", "g": "gemini"}[key]],
                                        cwd=ROOT / "backend", env=env, check=False)
             time.sleep(0.3)
     except KeyboardInterrupt:

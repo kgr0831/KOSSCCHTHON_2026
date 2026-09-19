@@ -36,7 +36,10 @@ export default function Shell({ children }: { children: React.ReactNode }) {
   useEffect(() => { document.title = `${location} · 두드리`; }, [location]);
   const item = (nav: typeof navigation[number]) => <Link key={nav.href} href={nav.href} aria-current={isActive(nav.href) ? "page" : undefined} className={`nav-item ${isActive(nav.href) ? "active" : ""}`}><span className="nav-icon"><nav.icon size={20} /></span><span>{nav.title}</span></Link>;
   const register = (mobile = false) => <button className={mobile ? "nav-register" : "button primary register-desktop"} onClick={openRegistration} aria-haspopup="dialog" aria-expanded={registerOpen}><span className="register-symbol"><Plus size={23} /></span><span>등록{!mobile && "하기"}</span></button>;
-  return <div className="app-shell">
+  return <div className="app-shell" onDragStartCapture={event => {
+    const target = event.target;
+    if (target instanceof Element && (target.closest("img,svg") || !target.closest('input,textarea,[contenteditable="true"],[contenteditable="plaintext-only"],pre,code,.code-box,.card-description,[data-selectable]'))) event.preventDefault();
+  }}>
     <aside className="sidebar">
       <Brand /><p className="sidebar-caption">새로운 연결, 나의 다음 이야기</p>
       <nav aria-label="주요 메뉴">{navigation.map(item)}</nav>

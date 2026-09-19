@@ -11,6 +11,7 @@ from .common import lock_user
 from .config import get_settings
 from .db import session_factory
 from .job_lease import locked_lease
+from .local_runtime import execution_target
 from .models import Job, PersonalSite, SiteVersion, now
 from .site_prompts import site_prompt
 from .site_render import safe_markup, update_fields, validate_code
@@ -22,6 +23,10 @@ def process_one(factory=None):
     token = str(uuid4())
     with factory.begin() as db:
         eligible = or_(Job.status == "queued", (Job.status == "running") & (Job.lease_until < now()))
+        targets = [execution_target()]
+        if get_settings().database_url.startswith("sqlite:"):
+            targets.append("server")  # Pre-migration local SQLite jobs.
+        eligible = eligible & Job.execution_target.in_(targets)
         job = db.scalar(select(Job).where(eligible, Job.available_at <= now()).order_by(Job.created_at).limit(1))
         if not job:
             return False

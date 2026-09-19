@@ -5,6 +5,7 @@ from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text, Unique
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base
+from .local_runtime import execution_target
 
 
 def uid() -> str:
@@ -395,6 +396,7 @@ class Job(Entity, Base):
     lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     lease_token: Mapped[str | None]
     error: Mapped[str | None]
+    execution_target: Mapped[str] = mapped_column(default=execution_target, server_default="server", index=True)
 
 
 class IdempotencyRecord(Entity, Base):
@@ -414,6 +416,9 @@ class AISettings(Base):
     transport: Mapped[str] = mapped_column(default="api")
     easy_model: Mapped[str] = mapped_column(default="")
     hard_model: Mapped[str] = mapped_column(default="")
+    cli_provider: Mapped[str] = mapped_column(default="codex", server_default="codex")
+    cli_model: Mapped[str] = mapped_column(default="", server_default="")
+    cli_connections: Mapped[list] = mapped_column(JSON, default=list, server_default="[]")
     revision: Mapped[int] = mapped_column(default=1)
 
 
