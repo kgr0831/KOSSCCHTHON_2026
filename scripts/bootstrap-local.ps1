@@ -8,6 +8,7 @@ $toolsRoot = Join-Path $repoRoot '.runtime\tools'
 $utf8 = New-Object Text.UTF8Encoding($false)
 $startupMutex = $null
 $ownsStartup = $false
+$connectorMode = $AppArguments.Count -ge 1 -and $AppArguments[0] -eq '--connector'
 
 function Install-VerifiedZip($Uri, $Checksum, $ArchiveName, $Destination) {
     $archive = Join-Path $toolsRoot $ArchiveName
@@ -63,6 +64,15 @@ function Initialize-Environment {
 
 try {
     if (-not [Environment]::Is64BitOperatingSystem) { throw '64-bit Windows 10 or newer is required.' }
+    # A paired connector is allowed to run beside the local development app.
+    # Reuse its managed Python without touching a live environment or taking
+    # ownership of the app supervisor.
+    $existingPython = Join-Path $repoRoot 'backend\.venv\Scripts\python.exe'
+    if ($connectorMode -and (Test-Path -LiteralPath $existingPython)) {
+        Push-Location (Join-Path $repoRoot 'backend')
+        try { & $existingPython -m app.cli_connector @AppArguments } finally { Pop-Location }
+        exit $LASTEXITCODE
+    }
     # Held through the supervisor lifetime, including the first installation.
     # A concurrent BAT must never run uv sync against a live virtual environment.
     $hasher = [Security.Cryptography.SHA256]::Create()
@@ -109,7 +119,11 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Python download failed. Check network access to GitHub and retry.' }
     & $uvExe sync --locked --no-build --managed-python --python $pythonRequest --directory (Join-Path $repoRoot 'backend')
     if ($LASTEXITCODE -ne 0) { throw 'Backend dependency installation failed. Check the package download message above.' }
-    & $uvExe run --no-sync --directory (Join-Path $repoRoot 'backend') python (Join-Path $repoRoot 'scripts\run_local.py') @AppArguments
+    if ($connectorMode) {
+        & $uvExe run --no-sync --directory (Join-Path $repoRoot 'backend') python -m app.cli_connector @AppArguments
+    } else {
+        & $uvExe run --no-sync --directory (Join-Path $repoRoot 'backend') python (Join-Path $repoRoot 'scripts\run_local.py') @AppArguments
+    }
     exit $LASTEXITCODE
 } catch {
     Write-Host '[setup] Could not finish startup. Check internet access, available disk space and permission to write this project folder.'

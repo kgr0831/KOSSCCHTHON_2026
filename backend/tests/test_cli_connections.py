@@ -49,7 +49,7 @@ def test_second_pc_must_check_its_own_login_and_cloud_preserves_metadata(world, 
     monkeypatch.setattr("app.ai_routes.cli_allowed", lambda: False)
     monkeypatch.setattr("app.cli_metadata.probe_cli", lambda _: pytest.fail("Cloud must never launch a CLI"))
     assert client.post("/api/v1/me/ai-cli-connections/codex/check", headers=auth).status_code == 403
-    assert client.put("/api/v1/me/ai-settings", headers=auth, json=edit).status_code == 403
+    assert client.put("/api/v1/me/ai-settings", headers=auth, json=edit).status_code == 409
     response = client.put("/api/v1/me/ai-settings", headers=auth, json={**edit, "transport": "api", "cli_model": "malicious"})
     assert response.status_code == 200
     assert response.json()["cli_provider"] == "claude" and response.json()["cli_model"] == "sonnet"

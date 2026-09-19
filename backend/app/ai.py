@@ -248,7 +248,8 @@ def provider_for(db, user_id):
     if not row:
         return AIProvider()
     from .local_runtime import device_id
-    linked = next((x for x in row.cli_connections if x.get("device_id") == device_id()
+    selected_device = row.cli_device_id or device_id()
+    linked = next((x for x in row.cli_connections if x.get("device_id") == selected_device == device_id()
                    and x.get("provider") == row.cli_provider), None)
     return AIProvider(row.transport, row.easy_model, row.hard_model, row.cli_provider, row.cli_model, linked)
 

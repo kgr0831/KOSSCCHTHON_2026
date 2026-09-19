@@ -508,6 +508,22 @@ class Job(Entity, Base):
     execution_target: Mapped[str] = mapped_column(default=execution_target, server_default="server", index=True)
 
 
+class CLIConnector(Entity, Base):
+    """A paired PC may claim only this owner's CLI-targeted document jobs."""
+
+    __tablename__ = "ai_cli_connectors"
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    device_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    device_name: Mapped[str] = mapped_column(String(100), default="")
+    token_hash: Mapped[str | None] = mapped_column(String(64), unique=True)
+    token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    pairing_hash: Mapped[str | None] = mapped_column(String(64), unique=True)
+    pairing_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class IdempotencyRecord(Entity, Base):
     __tablename__ = "idempotency_records"
     __table_args__ = (UniqueConstraint("user_id", "operation", "key"),)
@@ -527,6 +543,7 @@ class AISettings(Base):
     hard_model: Mapped[str] = mapped_column(default="")
     cli_provider: Mapped[str] = mapped_column(default="codex", server_default="codex")
     cli_model: Mapped[str] = mapped_column(default="", server_default="")
+    cli_device_id: Mapped[str] = mapped_column(String(64), default="", server_default="")
     cli_connections: Mapped[list] = mapped_column(JSON, default=list, server_default="[]")
     revision: Mapped[int] = mapped_column(default=1)
 

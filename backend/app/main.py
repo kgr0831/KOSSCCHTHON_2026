@@ -12,6 +12,7 @@ from . import (
     auth,
     career,
     coffee,
+    connector_routes,
     design_upload,
     dev,
     document_references,
@@ -99,7 +100,7 @@ def create_app():
         "/api/v1/me/avatar": (profiles.MAX_AVATAR_REQUEST_BYTES, "프로필 이미지는 최대 2MB까지 업로드할 수 있습니다."),
         **reference_paths,
     })
-    for module in (auth, supabase_auth, profiles, subscriptions, rewards, coffee, projects, realtime, search, dev, ai_routes, sites, materials,
+    for module in (auth, supabase_auth, profiles, subscriptions, rewards, coffee, projects, realtime, search, dev, ai_routes, connector_routes, sites, materials,
                    document_references,
                    external_accounts, career, design_upload):
         application.include_router(module.router)

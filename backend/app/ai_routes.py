@@ -2,13 +2,15 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import Field
+from sqlalchemy import select
 
 from .ai import AIProvider, cli_command, get_ai, model_ids, read_api_key
 from .auth import Actor, Input
 from .common import DB, data, lock_user, required, update_revision
-from .config import get_settings
+from .connector_routes import connector_data
+from .connector_support import selected_cli_connection
 from .local_runtime import cli_allowed, device_id
-from .models import AISettings, User
+from .models import AISettings, CLIConnector, User, now
 from .subscriptions import AIPlanUser, can_generate_ai_documents
 
 router = APIRouter(prefix="/api/v1")
@@ -18,11 +20,12 @@ router = APIRouter(prefix="/api/v1")
 def settings(db: DB, user: Actor):
     row = db.get(AISettings, user.id)
     result = data(row) if row else {"transport": "api", "easy_model": "", "hard_model": "", "revision": 0,
-                                  "cli_provider": "codex", "cli_model": "", "cli_connections": []}
+                                  "cli_provider": "codex", "cli_model": "", "cli_device_id": "", "cli_connections": []}
     result["cli_connections"] = [{**item, "current_pc": cli_allowed() and item["device_id"] == device_id()}
                                  for item in result["cli_connections"]]
-    if get_settings().environment == "production":
-        result["transport"] = "api"
+    connectors = db.scalars(select(CLIConnector).where(CLIConnector.user_id == user.id,
+        CLIConnector.revoked_at.is_(None)).order_by(CLIConnector.created_at.desc()))
+    result["cli_connectors"] = [connector_data(item) for item in connectors]
     return result
 
 
@@ -37,7 +40,7 @@ def providers(user: Actor):
     return {"api": {"configured": bool(read_api_key()), "models": available, "error": error},
             "cli": {"allowed": cli_allowed(), "codex_installed": cli_allowed() and bool(cli_command("codex")),
                     "claude_installed": cli_allowed() and bool(cli_command("claude")), "gemini_installed": cli_allowed() and bool(cli_command("gemini")),
-                    "connection": "separate_local_login"},
+                    "connection": "separate_local_login", "connector_available": True},
             "routing": {"easy": "Gemini Flash · 미제공 시 Claude Haiku", "hard": "Claude Sonnet"},
             "consent_text": "생성에 필요한 프로필·선택 자료·작성 내용이 선택한 AI 제공자로 전송됩니다. 결과는 승인 전까지 확정 프로필에 반영하지 않습니다."}
 
@@ -48,6 +51,7 @@ class ProviderEdit(Input):
     hard_model: str = Field(default="", max_length=150)
     cli_provider: Literal["codex", "claude"] | None = None
     cli_model: str | None = Field(default=None, max_length=150)
+    cli_device_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
     revision: int = Field(ge=0)
 
 
@@ -56,8 +60,6 @@ def edit_settings(body: ProviderEdit, db: DB, user: Actor):
     from fastapi import HTTPException
 
     from .ai import choose_model
-    if not cli_allowed() and body.transport != "api":
-        raise HTTPException(403, "배포 서버에서는 API 연결을 사용해 주세요. 구독 CLI는 로컬 실행 전용입니다.")
     lock_user(db, user.id)
     if body.transport == "api":
         if body.easy_model:
@@ -65,17 +67,28 @@ def edit_settings(body: ProviderEdit, db: DB, user: Actor):
         if body.hard_model:
             choose_model("hard", body.hard_model)
     row = db.get(AISettings, user.id)
-    changes = body.model_dump(exclude={"revision", "cli_provider", "cli_model"})
-    if cli_allowed():
-        family = body.cli_provider or (row.cli_provider if row else "codex")
-        model = body.cli_model if body.cli_model is not None else (row.cli_model if row else "")
-        connection = next((x for x in (row.cli_connections if row else [])
-                           if x["provider"] == family and x["device_id"] == device_id()), None)
-        if body.transport != "api" and (not connection or connection["status"] != "connected"):
-            raise HTTPException(409, "먼저 이 PC의 CLI 연결을 확인해 주세요.")
-        if model and (not connection or model not in connection["models"]):
+    changes = body.model_dump(exclude={"revision", "cli_provider", "cli_model", "cli_device_id"})
+    family = body.cli_provider or (row.cli_provider if row else "codex")
+    model = body.cli_model if body.cli_model is not None else (row.cli_model if row else "")
+    selected_device = body.cli_device_id if body.cli_device_id is not None else (row.cli_device_id if row else "")
+    if not selected_device and cli_allowed():
+        selected_device = device_id()
+    connection = selected_cli_connection(row, provider=family, device_id=selected_device)
+    if body.transport != "api":
+        if cli_allowed() and selected_device != device_id():
+            raise HTTPException(409, "이 PC에서 확인한 CLI 연결을 선택해 주세요.")
+        if not connection or connection.get("status") != "connected":
+            raise HTTPException(409, "먼저 PC 커넥터를 연결하고 해당 CLI 로그인 상태를 확인해 주세요.")
+        if not cli_allowed() and not db.scalar(select(CLIConnector.id).where(
+                CLIConnector.user_id == user.id, CLIConnector.device_id == selected_device,
+                CLIConnector.status == "active", CLIConnector.revoked_at.is_(None),
+                CLIConnector.token_expires_at > now())):
+            raise HTTPException(409, "선택한 PC 커넥터가 연결되지 않았습니다. 새 연결 코드를 만들어 다시 실행해 주세요.")
+        if model and model not in connection.get("models", []):
             raise HTTPException(422, "연결을 확인한 CLI의 모델 목록에서 선택해 주세요.")
-        changes.update(cli_provider=family, cli_model=model)
+        changes.update(cli_provider=family, cli_model=model, cli_device_id=selected_device)
+    elif connection and connection.get("status") == "connected" and (not model or model in connection.get("models", [])):
+        changes.update(cli_provider=family, cli_model=model, cli_device_id=selected_device)
     if not row:
         if body.revision != 0:
             raise HTTPException(409, "설정을 다시 불러와 주세요.")

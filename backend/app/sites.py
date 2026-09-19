@@ -8,8 +8,19 @@ from sqlalchemy import func, select, update
 from .auth import Actor, Input
 from .common import DB, data, lock_user, owner, required, update_revision
 from .config import get_settings
+from .connector_support import connector_execution_target, selected_cli_connection
 from .document_references import selected_references
-from .models import Job, PersonalSite, Publication, SiteVersion, SiteVersionReferenceInput, User, now
+from .local_runtime import execution_target
+from .models import (
+    AISettings,
+    Job,
+    PersonalSite,
+    Publication,
+    SiteVersion,
+    SiteVersionReferenceInput,
+    User,
+    now,
+)
 from .profiles import public_user
 from .site_render import html_document, safe_markup, update_fields
 from .styles import get_style, styles
@@ -102,9 +113,11 @@ def generate(kind: Kind, body: NewVersion, db: DB, user: AIPlanUser):
         raise HTTPException(403, "AI document generation requires a PREMIUM plan.")
     style = get_style(body.style_id, db, user)
     references = selected_references(db, user.id, kind, body.reference_ids)
+    ai_settings = db.get(AISettings, user.id)
     if any(reference.image_content for reference in references):
-        from .ai import provider_for
-        if not provider_for(db, user.id).supports_image_inputs("hard"):
+        connection = selected_cli_connection(ai_settings)
+        if not (ai_settings and ai_settings.transport in ("cli", "hybrid") and ai_settings.cli_provider == "codex"
+                and connection and connection.get("status") == "connected"):
             raise HTTPException(422, "PNG/JPG 참고 자료는 이 PC의 Codex CLI 연결에서만 사용할 수 있어요.")
     site = db.scalar(select(PersonalSite).where(PersonalSite.user_id == user.id, PersonalSite.site_kind == kind))
     if not site:
@@ -128,7 +141,11 @@ def generate(kind: Kind, body: NewVersion, db: DB, user: AIPlanUser):
                        validation={"base_site_revision": site.revision})
     db.add_all(SiteVersionReferenceInput(version_id=row.id, reference_id=reference.id,
                                          reference_revision=reference.revision) for reference in references)
-    db.add(Job(user_id=user.id, kind="site", target_id=row.id))
+    target = connector_execution_target(ai_settings)
+    # Local API/worker launches retain the existing same-PC execution target;
+    # only a deployed account with a paired CLI selection targets that PC.
+    db.add(Job(user_id=user.id, kind="site", target_id=row.id,
+               execution_target=execution_target() if target == "server" else target))
     return {**version_data(row), "site_revision": site.revision}
 
 
