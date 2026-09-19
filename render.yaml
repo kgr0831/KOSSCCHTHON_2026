@@ -9,7 +9,9 @@ services:
     branch: feat/MVP
     dockerfilePath: ./Dockerfile
     healthCheckPath: /api/v1/health
-    autoDeployTrigger: off
+    # Match the GitHub Actions deployment check: only a validated feat/MVP
+    # commit is eligible for the production API deployment.
+    autoDeployTrigger: checksPass
     envVars:
       - key: DUDRI_SERVICE_ROLE
         value: api
