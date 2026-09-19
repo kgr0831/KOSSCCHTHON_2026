@@ -51,6 +51,14 @@ try:
             break
     if not ready or not supervisor or not all(listening(port) for port in ports):
         raise RuntimeError("Launcher readiness check failed.")
+    # Running the actual BAT twice must reopen the same stack without creating
+    # another supervisor or showing its error/pause branch.
+    duplicate = subprocess.run(["cmd.exe", "/d", "/c", str(root / "start-local.bat"), "--no-browser"],
+                               cwd=root, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15)
+    assert duplicate.returncode == 0, "Repeated BAT launch failed."
+    assert "[local] ALREADY RUNNING " in duplicate.stdout
+    assert "[local] SUPERVISOR " not in duplicate.stdout
+    assert all(listening(port) for port in ports), "Repeated launch stopped the original services."
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
     kernel.OpenProcess.argtypes, kernel.OpenProcess.restype = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD], wintypes.HANDLE
     kernel.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
@@ -70,7 +78,15 @@ try:
         time.sleep(0.2)
     assert not any(listening(port) for port in ports), "An owned server survived supervisor termination."
     process.wait(timeout=5)
-    print("PASS: API + frontend + site server ready; forced supervisor termination closed all three ports.")
+    with socket.socket() as unrelated:
+        unrelated.bind(("127.0.0.1", ports[0]))
+        unrelated.listen()
+        conflict = subprocess.run([sys.executable, str(root / "scripts/run_local.py"), "--no-browser"],
+                                  cwd=root, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
+        assert conflict.returncode != 0 and "ALREADY RUNNING" not in conflict.stdout
+        assert "[local] SUPERVISOR " not in conflict.stdout
+        assert listening(ports[0]), "An unrelated port owner was stopped."
+    print("PASS: repeated BAT reused the original stack; termination closed all services; unrelated port owner preserved.")
 finally:
     if process.poll() is None:
         process.terminate()

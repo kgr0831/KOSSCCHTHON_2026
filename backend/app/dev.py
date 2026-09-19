@@ -1,3 +1,5 @@
+import os
+
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import Field
 
@@ -24,6 +26,13 @@ def accounts(request: Request, db: DB):
     return {"items": [{"id": user_id, "name": db.get(Profile, user_id).display_name,
                         "school": PEOPLE[i][1], "role": PEOPLE[i][3], "is_demo": True}
                        for i, user_id in enumerate(DEMO_USERS) if db.get(Profile, user_id)]}
+
+
+@router.get("/instance")
+def instance(request: Request):
+    local_only(request)
+    return {"service": "dudri-local", "instance": os.environ.get("DUDRI_LOCAL_INSTANCE", ""),
+            "supervisor": os.environ.get("DUDRI_LOCAL_SUPERVISOR", "")}
 
 
 class DemoLogin(Input):

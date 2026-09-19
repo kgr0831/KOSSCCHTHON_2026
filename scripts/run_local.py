@@ -1,5 +1,7 @@
 """One terminal: persistent SQLite, API, worker, isolated sites and Next.js."""
 import argparse
+import hashlib
+import json
 import os
 import shutil
 import socket
@@ -16,6 +18,47 @@ sys.path.insert(0, str(ROOT / "backend"))
 from app.windows_job import WindowsJob  # noqa: E402 - standalone script resolves the repository first
 
 
+def instance_key(ports):
+    # A non-secret identifier for this workspace and exact port set. Never used
+    # as authentication or permission to stop an existing process.
+    value = f"{os.path.normcase(str(ROOT))}|{','.join(map(str, ports))}"
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
+def port_in_use(port):
+    with socket.socket() as probe:
+        probe.settimeout(1)
+        return probe.connect_ex(("127.0.0.1", port)) == 0
+
+
+def read_local_json(port, path):
+    # Ignore system proxy settings for loopback health checks.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(f"http://127.0.0.1:{port}{path}", timeout=2) as response:
+        if response.status != 200:
+            return {}
+        return json.loads(response.read(4096))
+
+
+def running_instance(ports, expected):
+    try:
+        frontend = read_local_json(ports[0], "/api/v1/dev/instance")
+        backend = read_local_json(ports[1], "/api/v1/dev/instance")
+        sites = read_local_json(ports[2], "/")
+        if (frontend == backend and backend.get("service") == "dudri-local"
+                and backend.get("instance") == expected and backend.get("supervisor")
+                and sites.get("service") == "dudri-sites" and sites.get("status") == "ok"):
+            return backend
+    except (OSError, ValueError, AttributeError, urllib.error.URLError):
+        pass
+    return None
+
+
+def open_browser(url):
+    opened = webbrowser.open(url)
+    print("[local] Browser launch requested." if opened else f"[local] Open {url} in your browser.", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--no-browser", action="store_true")
@@ -23,16 +66,27 @@ def main():
     parser.add_argument("--api-port", type=int, default=8000)
     parser.add_argument("--site-port", type=int, default=8001)
     args = parser.parse_args()
-    job = WindowsJob()
-    assert os.name != "nt" or job.handle
-    print(f"[local] SUPERVISOR {os.getpid()}", flush=True)
     ports = [args.port, args.api_port, args.site_port]
     if len(set(ports)) != 3 or any(port < 1024 or port > 65535 for port in ports):
         raise SystemExit("Use three distinct ports between 1024 and 65535.")
-    for port in ports:
-        with socket.socket() as probe:
-            if probe.connect_ex(("127.0.0.1", port)) == 0:
-                raise SystemExit(f"Port {port} is in use. Close the earlier local terminal or choose another port.")
+    identity = instance_key(ports)
+    occupied = [port for port in ports if port_in_use(port)]
+    if occupied:
+        existing = running_instance(ports, identity)
+        if existing:
+            url = f"http://localhost:{args.port}"
+            print(f"[local] ALREADY RUNNING {url} | Original supervisor {existing['supervisor']}", flush=True)
+            print("[local] Reusing the existing services. Close the original server terminal to stop them.", flush=True)
+            if not args.no_browser:
+                open_browser(url)
+            return
+        raise SystemExit(f"Port(s) {', '.join(map(str, occupied))} are in use by another app or a server still starting.\n"
+                         "No existing process was stopped. Close its terminal, or run:\n"
+                         "start-local.bat --port 3002 --api-port 8002 --site-port 8003")
+    # A repeated launch returns above without taking ownership of any processes.
+    job = WindowsJob()
+    assert os.name != "nt" or job.handle
+    print(f"[local] SUPERVISOR {os.getpid()}", flush=True)
     node = shutil.which("node")
     if not node:
         raise SystemExit("Node.js 22 or newer is required.")
@@ -40,6 +94,7 @@ def main():
     env.update(PYTHONUNBUFFERED="1", DUDRI_ENVIRONMENT="development", DUDRI_LOCAL_DEMO_ENABLED="true",
                DUDRI_APP_ORIGIN=f"http://localhost:{args.port}", DUDRI_SITE_ORIGIN=f"http://127.0.0.1:{args.site_port}",
                API_ORIGIN=f"http://127.0.0.1:{args.api_port}")
+    env.update(DUDRI_LOCAL_INSTANCE=identity, DUDRI_LOCAL_SUPERVISOR=str(os.getpid()))
     # Absolute SQLite URL prevents cwd changes from creating a second database.
     env.setdefault("DUDRI_DATABASE_URL", f"sqlite:///{(ROOT / 'backend/.data/dudri.db').as_posix()}")
     print("[local] Preparing persistent database and fictional demo accounts...", flush=True)
@@ -76,8 +131,7 @@ def main():
         url = f"http://localhost:{args.port}"
         print(f"[local] READY {url} | API {args.api_port} | Sites {args.site_port} | SQLite persisted", flush=True)
         if not args.no_browser:
-            opened = webbrowser.open(url)
-            print("[local] Browser launch requested." if opened else f"[local] Open {url} in your browser.", flush=True)
+            open_browser(url)
         print("[local] Close this terminal or press Ctrl+C to stop all owned services.", flush=True)
         print("[local] Press C for Claude subscription login, G for isolated Gemini login.", flush=True)
         while True:

@@ -7,6 +7,7 @@
 | 요청 | 구현 |
 | --- | --- |
 | 단일 터미널 BAT, 준비 후 브라우저, 창 종료 시 프로세스 종료 | `start-local.bat`, `scripts/run_local.py`, Windows Job Object. API·Next·worker·사이트 제공기를 함께 관리 |
+| BAT 재실행 시 포트 충돌 | `scripts/run_local.py`, `backend/app/dev.py`에서 폴더·포트 식별값과 프런트 프록시/API 상태를 확인. 같은 실행이면 기존 브라우저 재열기·정상 종료. 다른 프로그램은 유지 |
 | 로컬 DB와 더미 사용자 | 영속 SQLite `backend/.data/dudri.db`, Alembic 마이그레이션, 8명의 가상 사용자·학교·태그·프로젝트·커피챗 seed. 재실행 시 수정값 유지 |
 | 추천 임시 제공 | `/recommendations`에서 임의 순서로 조회. 적합도·AI 매칭 점수 없음 |
 | 최신 Figma 및 기존 댓글 | 모바일 공통 디자인을 PC에도 적용, PC 사이드바. 커리어맵·모집·AI 화면 추가. 읽기 전용 댓글 확인 및 [반영표](docs/design/README.md) |
