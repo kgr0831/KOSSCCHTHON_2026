@@ -29,6 +29,7 @@ EXPOSE 10000
 ENTRYPOINT ["python", "/app/scripts/run_deployed.py"]
 
 FROM runtime AS validation
+COPY scripts/run_local.py ./scripts/run_local.py
 RUN uv sync --locked --no-build --directory backend
 RUN DUDRI_ENVIRONMENT=test uv run --no-sync --directory backend pytest -q
 
