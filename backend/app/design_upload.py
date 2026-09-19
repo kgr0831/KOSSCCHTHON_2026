@@ -17,6 +17,7 @@ from .auth import Actor, Input
 from .common import DB, lock_user
 from .config import get_settings
 from .job_lease import locked_lease
+from .local_runtime import execution_target
 from .models import Job, Material, now
 from .site_render import html_document, validate_code
 from .sites import Code
@@ -77,6 +78,7 @@ def preview(style_id: str, body: Preview, db: DB, user: Actor):
             job = db.scalar(select(Job).where(Job.kind == "style", Job.target_id == row.id))
             if job:
                 job.status, job.error, job.lease_token, job.lease_until, job.available_at = "queued", None, None, None, now()
+                job.execution_target = execution_target()
             else:
                 db.add(Job(user_id=user.id, kind="style", target_id=row.id))
         return style_data(row)

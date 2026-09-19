@@ -40,8 +40,13 @@ def test_design_upload_is_private_persistent_and_retryable(world, monkeypatch):
     monkeypatch.setattr(AIProvider, "generate", fail)
     assert process_one(world["factory"])
     assert client.get(f'/api/v1/portfolio-styles/{style["id"]}', headers=headers).json()["status"] == "failed"
+    with world["factory"].begin() as db:
+        db.scalar(select(Job).where(Job.kind == "style")).execution_target = "pc:previous-installation"
     retry = client.post(f'/api/v1/portfolio-styles/{style["id"]}/preview', headers=headers, json={"consent": True})
     assert retry.status_code == 202
+    with world["factory"]() as db:
+        from app.local_runtime import execution_target
+        assert db.scalar(select(Job).where(Job.kind == "style")).execution_target == execution_target()
     monkeypatch.setattr(AIProvider, "generate", lambda *a, **k: fake_result().code)
     monkeypatch.setattr("app.design_upload.reference_images", lambda code: {"reference_image": "data:image/png;base64,fixture", "mobile_reference_image": "data:image/png;base64,fixture-mobile"})
     assert process_one(world["factory"])
