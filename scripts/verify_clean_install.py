@@ -5,9 +5,11 @@ import os
 import queue
 import shutil
 import socket
+import sqlite3
 import subprocess
 import threading
 import time
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -89,8 +91,16 @@ def main():
         for port in ports[:2]:
             with opener.open(f"http://127.0.0.1:{port}/api/v1/health") as response:
                 assert json.load(response)["database"] == "ok"
-        with opener.open(f"http://127.0.0.1:{ports[0]}/api/v1/dev/accounts") as response:
-            assert len(json.load(response)["items"]) == 8
+        with opener.open(f"http://127.0.0.1:{ports[0]}/api/v1/dev/instance") as response:
+            assert json.load(response)["service"] == "dudri-local"
+        try:
+            opener.open(f"http://127.0.0.1:{ports[0]}/api/v1/dev/accounts")
+            raise AssertionError("Demo account endpoint must not exist")
+        except urllib.error.HTTPError as error:
+            assert error.code == 404
+        with sqlite3.connect(target / "backend/.data/dudri.db") as database:
+            assert database.execute("SELECT count(*) FROM users").fetchone()[0] == 0
+            assert database.execute("SELECT count(*) FROM universities").fetchone()[0] == 3
         if node_archive.is_file():
             assert (target / ".runtime/tools/node-v22.23.2-win-x64/node_modules/npm/bin/npm-cli.js").is_file()
             assert (target / ".runtime/tools/node-v22.23.2-win-x64/.dudri-install-complete").is_file()

@@ -110,14 +110,14 @@ def main():
     if not node:
         raise SystemExit("Node.js 22 or newer is required.")
     env = dict(os.environ)
-    env.update(PYTHONUNBUFFERED="1", DUDRI_ENVIRONMENT="development", DUDRI_LOCAL_DEMO_ENABLED="true",
+    env.update(PYTHONUNBUFFERED="1", DUDRI_ENVIRONMENT="development",
                DUDRI_APP_ORIGIN=f"http://localhost:{args.port}", DUDRI_SITE_ORIGIN=f"http://127.0.0.1:{args.site_port}",
                API_ORIGIN=f"http://127.0.0.1:{args.api_port}")
     env.update(DUDRI_LOCAL_INSTANCE=identity, DUDRI_LOCAL_SUPERVISOR=str(os.getpid()))
     # Settings reads the root .env directly; do not shadow it with a SQLite env default.
     database_kind = "PostgreSQL" if get_settings().database_url.startswith("postgresql") else "SQLite"
     front_env = frontend_environment(env)
-    print(f"[local] Preparing {database_kind} and fictional demo accounts...", flush=True)
+    print(f"[local] Preparing {database_kind} and service catalog...", flush=True)
     subprocess.run([sys.executable, "-m", "app.prepare_database", *(["--import-sqlite"] if args.import_sqlite else [])],
                    cwd=ROOT / "backend", env=env, check=True)
     next_entry = ROOT / "frontend/node_modules/next/dist/bin/next"

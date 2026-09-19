@@ -10,7 +10,7 @@ from .config import get_settings
 from .db import session_factory
 from .migrate_sqlite import TransferError
 from .models import User
-from .seed import catalog, seed
+from .seed import catalog
 
 
 def upgrade():
@@ -38,10 +38,7 @@ def main():
                 if not db.scalar(select(User.id).limit(1)) and local_data_exists():
                     raise SystemExit("[database] Existing SQLite data found. Close the app and run start-local.bat --import-sqlite once to preserve it in the empty PostgreSQL database.")
         with session_factory().begin() as db:
-            if settings.environment == "development" and settings.local_demo_enabled:
-                seed(db)
-            else:
-                catalog(db)
+            catalog(db)
         print("[database] Migrations complete. Existing records preserved.", flush=True)
     except TransferError as exc:
         raise SystemExit(f"[database] {exc}") from None

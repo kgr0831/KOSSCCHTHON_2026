@@ -7,8 +7,9 @@ async function fixtures(page: Page, guest = false) {
     const path = new URL(route.request().url()).pathname.replace("/api/v1", "");
     let result: unknown = { items: [], next_cursor: null };
     if (path === "/auth/refresh") { await route.fulfill({ status: loggedIn ? 200 : 401, json: loggedIn ? { access_token: "fixture-only" } : {} }); return; }
-    if (path === "/dev/accounts") result = { items: [{ id: "viewer", name: "김민준", school: "국민대", role: "개발" }] };
-    if (path === "/dev/login") { loggedIn = true; result = { access_token: "fixture-only" }; }
+    if (path.startsWith("/dev/")) throw new Error("The app must never request demo accounts or login");
+    if (path === "/auth/google") result = { url: new URL("/auth/callback?code=fixture-code", page.url()).href };
+    if (path === "/auth/google/callback") { loggedIn = true; result = { access_token: "fixture-only" }; }
     if (path === "/me") result = user;
     if (path === "/me/preferences") result = user.preferences;
     if (path === "/projects") result = { items: [{ id: "p1", title: "작은 아이디어를 함께 완성하는 프로젝트", summary: "내용 ".repeat(60), project_status: "planning", visibility: "private", member_count: 3 }], next_cursor: null };
@@ -48,7 +49,8 @@ test("mobile login retains the selected view and all five navigation positions",
   await page.getByRole("link", { name: "Google로 시작하기" }).click();
   const dialog = page.getByRole("dialog", { name: "로그인 · 회원가입", exact: true });
   await expect(dialog).toBeVisible();
-  await dialog.getByRole("button", { name: /김민준/ }).click();
+  await expect(dialog.getByText("로컬 체험 · 가상 인물")).toHaveCount(0);
+  await dialog.getByRole("button", { name: "Google로 시작하기", exact: true }).click();
   await expect(dialog).not.toBeVisible();
   await expect(page.getByRole("heading", { name: "함께 만드는 프로젝트" })).toBeVisible();
   expect(page.url()).toBe(address);
@@ -62,9 +64,10 @@ test("direct auth entry opens the login dialog once", async ({ page }) => {
   await page.goto("/auth");
   const dialog = page.getByRole("dialog", { name: "로그인 · 회원가입", exact: true });
   await expect(dialog).toBeVisible();
-  await dialog.getByRole("button", { name: /김민준/ }).click();
+  await expect(dialog.getByText("로컬 체험 · 가상 인물")).toHaveCount(0);
+  await dialog.getByRole("button", { name: "Google로 시작하기", exact: true }).click();
   await expect(dialog).not.toBeVisible();
-  await expect(page.getByRole("heading", { name: "안녕하세요, 김민준님" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "내 프로필", exact: true })).toBeVisible();
 });
 
 test("project spacing, long roles, and sidebar controls fit short and narrow screens", async ({ page }, info) => {

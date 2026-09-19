@@ -15,7 +15,6 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="DUDRI_", env_file=Path(__file__).resolve().parents[2] / ".env", env_file_encoding="utf-8-sig", extra="ignore", hide_input_in_errors=True)
     environment: Literal["development", "test", "production"] = "development"
     service_role: Literal["app", "api", "sites"] = "app"
-    local_demo_enabled: bool = False
     project_root: Path = Path(__file__).resolve().parents[2]
     database_url: str = Field(default=LOCAL_DATABASE_URL, repr=False)
     app_origin: str = "http://localhost:3000"

@@ -14,7 +14,7 @@ def main():
     env = dict(os.environ)
     role = env.get("DUDRI_SERVICE_ROLE", "api")
     env["DUDRI_SERVICE_ROLE"] = role
-    env.update(DUDRI_ENVIRONMENT="production", DUDRI_LOCAL_DEMO_ENABLED="false", API_ORIGIN="http://127.0.0.1:8000")
+    env.update(DUDRI_ENVIRONMENT="production", API_ORIGIN="http://127.0.0.1:8000")
     public_url = env.get("RENDER_EXTERNAL_URL", "").rstrip("/")
     if public_url:
         env.setdefault("DUDRI_APP_ORIGIN" if role == "app" else "DUDRI_SITE_ORIGIN", public_url)

@@ -6,7 +6,7 @@
 
 `C:\koss2026\start-local.bat`를 실행하세요. 64비트 Windows와 인터넷 연결이 필요합니다. Node.js·uv·Python을 미리 설치하지 않아도 프로젝트의 `.runtime/tools`에 고정 버전을 준비합니다. 시스템 PATH와 Python 등록 정보는 변경하지 않습니다.
 
-하나의 터미널에서 DB 마이그레이션·더미 데이터 준비, 프런트엔드, API, AI 작업 실행기, 생성 사이트 제공기를 시작합니다. 실제 DB 연결까지 확인한 뒤 브라우저를 자동으로 엽니다. 처음 실행할 때 백엔드·프런트 패키지를 lock 파일 기준으로 설치합니다. `.env`의 빠진 항목은 빈 템플릿에서 보완하고 기존 값은 유지합니다. 설치가 중단되면 BAT를 다시 실행하세요. 실패한 창은 오류를 읽을 수 있도록 열린 상태로 남습니다.
+하나의 터미널에서 DB 마이그레이션·학교/태그 기본 설정 준비, 프런트엔드, API, AI 작업 실행기, 생성 사이트 제공기를 시작합니다. 실제 DB 연결까지 확인한 뒤 브라우저를 자동으로 엽니다. 처음 실행할 때 백엔드·프런트 패키지를 lock 파일 기준으로 설치합니다. `.env`의 빠진 항목은 빈 템플릿에서 보완하고 기존 값은 유지합니다. 설치가 중단되면 BAT를 다시 실행하세요. 실패한 창은 오류를 읽을 수 있도록 열린 상태로 남습니다.
 
 Python 백엔드를 pip로 설치하려면 루트에서 `python -m pip install -r requirement.txt`를 실행하세요. Python 3.11 이상이 필요하며, `backend/uv.lock`의 실행·개발 의존성 버전을 고정한 목록입니다. 프런트 의존성은 `npm --prefix frontend ci`로 설치합니다. BAT 실행은 기존처럼 uv를 사용합니다.
 
@@ -40,9 +40,9 @@ start-local.bat --import-sqlite
 
 이전은 단일 트랜잭션이며 원본 SQLite를 보존합니다. 이미 데이터가 있는 대상은 덮어쓰지 않습니다. 기존 인증 세션·인증 링크·외부 계정 비밀은 이전하지 않으므로 다시 로그인하고 외부 계정을 다시 연결해야 합니다. 이미 이전했다면 일반 BAT로 실행하세요.
 
-## 바로 체험하기
+## 시작하기
 
-로그인 화면의 **로컬 체험 · 가상 인물**에서 계정을 선택하세요. 8명의 가상 사용자, 기술·관심사, 경력, 프로젝트 모집, 커피챗 요청과 약속이 로컬 DB에 준비됩니다. 다시 실행해도 수정한 데이터는 덮어쓰지 않습니다. 데모 로그인은 development 모드·명시적 로컬 실행·허용된 더미 계정으로 제한됩니다.
+Google로 로그인하고 프로필에서 학교 이메일을 인증하세요. 신규 DB에는 학교·도메인·태그만 준비하며 사용자·프로젝트·커피챗 더미 데이터는 생성하지 않습니다. PC 실행과 배포 환경 모두 같은 원칙을 적용합니다.
 
 - **AI 스튜디오:** 포트폴리오 / 자기 PR 프로필 / CV·이력서 / 자기소개서 선택 → 디자인 예시 비교 → 공개 입력 확인·AI 전송 동의 → 생성. 저장된 버전을 다시 열고 내용·디자인·코드를 편집할 수 있습니다.
 - **디자인 추가:** AI 스튜디오의 ‘내 디자인 MD 추가’에서 UTF-8 MD(64KB 이하)를 업로드합니다. 개인 라이브러리에 원문을 저장하고 Claude가 같은 가상 인물의 PC·모바일 예시 PNG를 생성합니다. 작업 상태·실패·재시도가 표시되며 새 스타일은 수정본에도 적용할 수 있습니다. `Design/`의 MD도 자동으로 읽습니다.
@@ -100,8 +100,7 @@ HTML 다운로드는 스크립트를 제외한 정적 문서입니다. 브라우
 - 기존 Playwright 전체 29개 통과 기록: 320–1440px 반응형·낮은 PC 사이드바·메뉴·로그인·저장본 편집·스타일 폼·팝업 중앙 정렬·계정 전환 경계·OAuth 복귀. 이후 CLI PC/배포 설정 2개, UI 선택·이미지 드래그·소개/코드 복사·스크롤 유지 1개 추가 검사도 통과했습니다.
 - 새 Supabase에 원본의 128개 레코드를 이전하고 전체 필드 일치, RLS·역할 권한, 앱 API 저장·재조회·소유권 경계를 검증했습니다. 원본 SQLite는 보존했습니다.
 - 비밀값 없는 별도 폴더에서 개발 도구 PATH 없이 시작, 중단된 Node 설치 복구, 중복 BAT 재사용과 실행 중 환경 보존을 검증했습니다. 완전히 초기화한 다른 PC의 실기기 검증은 별도로 남습니다.
-- 실제 로컬 더미 로그인, 새 화면 6종의 모바일·PC API 연동, 실제 생성본 표시 확인.
-- 국민대 API 인증, Haiku 초안, Sonnet 포트폴리오·CV 생성 및 DB 저장 성공. 더미 김민준 계정의 각 문서 최신 버전에서 실제 생성 예시를 볼 수 있습니다.
+- 국민대 API 인증, Haiku 초안, Sonnet 포트폴리오·CV 생성 및 DB 저장 성공. 검증용 계정과 생성물은 전체 초기화로 삭제했습니다.
 - Codex CLI 0.155.1에서 공식 계정·모델 조회, 본인 계정의 Supabase 메타데이터 저장, 저장 설정을 읽은 gpt-5.6-sol의 실제 짧은 JSON 생성 성공. Claude 어댑터도 유지하지만 사용자의 구독 해지로 현재 Claude 생성 성공은 확인하지 않습니다.
 - 실제 배포에서 Google 로그인·로그아웃·재로그인, 다른 학교 이메일로 같은 계정의 숭실대 인증, Sonnet 포트폴리오 생성과 DB 저장을 확인했습니다. 문서는 비공개 상태입니다.
 
@@ -116,7 +115,7 @@ uv run --directory backend python ../scripts/verify_launcher.py
 
 디자인 예시 이미지를 다시 만들려면 `uv run --directory backend python ../scripts/generate_style_previews.py`, 이어서 `node frontend/scripts/render-style-previews.mjs`를 실행하세요. 렌더링에는 Edge가 필요합니다.
 
-실제 이메일 인증에는 `.env`의 SMTP 또는 HTTPS 메일 설정이 필요합니다. Brevo는 `DUDRI_MAIL_PROVIDER=brevo`, `DUDRI_MAIL_API_KEY`, 인증된 발신 주소인 `DUDRI_SMTP_SENDER`를 사용합니다. 키는 서버에서만 읽으며 로컬 체험에는 메일 설정이 필요 없습니다. Figma 댓글별 반영은 [디자인 기록](docs/design/README.md), 전체 Architecture 범위의 남은 항목은 [구현 기록](IMPLEMENTATION.md)을 참고하세요.
+실제 이메일 인증에는 `.env`의 SMTP 또는 HTTPS 메일 설정이 필요합니다. Brevo는 `DUDRI_MAIL_PROVIDER=brevo`, `DUDRI_MAIL_API_KEY`, 인증된 발신 주소인 `DUDRI_SMTP_SENDER`를 사용합니다. 키는 서버에서만 읽습니다. Figma 댓글별 반영은 [디자인 기록](docs/design/README.md), 전체 Architecture 범위의 남은 항목은 [구현 기록](IMPLEMENTATION.md)을 참고하세요.
 
 Google 로그인은 `DUDRI_SUPABASE_URL`과 `DUDRI_SUPABASE_PUBLISHABLE_KEY`를 사용하는 서버 PKCE 방식입니다. Supabase Google provider의 콜백은 `<Supabase URL>/auth/v1/callback`, 앱의 허용 리디렉션은 `<DUDRI_APP_ORIGIN>/auth/callback`입니다. access token은 브라우저 메모리, refresh token은 HttpOnly 쿠키에 보관하며 앱 DB에는 세션 해시만 저장합니다.
 

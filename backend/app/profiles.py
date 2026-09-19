@@ -103,7 +103,10 @@ def user_profile(user_id: str, db: DB, actor: Actor):
     user = required(db, User, user_id)
     if user.account_status != "active":
         raise HTTPException(404, "공개 프로필을 찾을 수 없습니다.")
-    return public_user(db, user)
+    result = public_user(db, user)
+    # Request availability is actionable even when other activity conditions are private.
+    result["can_request_coffee_chat"] = actor.id != user.id and required(db, Preference, user.id).coffee_chat_available
+    return result
 
 
 class AffiliationInput(Input):

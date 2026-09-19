@@ -6,7 +6,7 @@ from sqlalchemy import select
 from app.ai import AIProvider, choose_model
 from app.common import facts_changed, lock_user
 from app.db import get_db
-from app.models import Job, Material, Profile, SiteVersion, User
+from app.models import Job, Material, Profile, SiteVersion
 from app.models import now as utc_now
 from app.site_render import read_fields, update_fields
 from app.site_server import app as public_app
@@ -144,16 +144,3 @@ def test_model_routing_uses_authorized_haiku_fallback(monkeypatch):
     assert "haiku" in choose_model("easy") and "sonnet" in choose_model("hard")
     monkeypatch.setattr("app.ai.model_ids", lambda: ["claude-haiku-4-5", "gemini-2.5-flash"])
     assert "gemini" in choose_model("easy")
-
-
-def test_seed_idempotent_preserves_user_changes(world):
-    from app.seed import DEMO_USERS, seed
-    with world["factory"].begin() as db:
-        seed(db)
-    with world["factory"].begin() as db:
-        db.get(Profile, DEMO_USERS[0]).bio = "User edited this"
-    with world["factory"].begin() as db:
-        seed(db)
-    with world["factory"]() as db:
-        assert db.get(Profile, DEMO_USERS[0]).bio == "User edited this"
-        assert len(list(db.scalars(select(User).where(User.id.in_(DEMO_USERS))))) == 8
