@@ -1,7 +1,8 @@
 {
   "name": "dudri", "private": true,
   "scripts": {
-    "dev": "npm --prefix frontend run dev",
+    "dev": "start-local.bat",
+    "dev:web": "npm --prefix frontend run dev",
     "build": "npm --prefix frontend run build",
     "typecheck": "npm --prefix frontend run typecheck",
     "test:api": "uv run --directory backend pytest -q",

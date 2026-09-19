@@ -1,5 +1,15 @@
 export class ApiError extends Error {
-  constructor(public status: number, message: string) { super(message); }
+  constructor(public status: number, message: string, public code = "") { super(message); }
+}
+
+const connectionMessage = "백엔드 서버에 연결하지 못했어요. start-local.bat 실행 창을 확인한 뒤 다시 연결해 주세요.";
+
+async function responseError(response: Response): Promise<ApiError> {
+  const error = await response.json().catch(() => null);
+  if (!error && response.status >= 500) return new ApiError(response.status, connectionMessage, "BACKEND_UNAVAILABLE");
+  const detail = error?.detail;
+  const message = Array.isArray(detail) ? detail.map((x: { msg: string }) => x.msg).join(" · ") : detail;
+  return new ApiError(response.status, typeof message === "string" ? message : "요청을 처리하지 못했습니다.", error?.code || "");
 }
 
 let accessToken: string | null = null;
@@ -13,33 +23,36 @@ export async function refreshSession(): Promise<boolean> {
   const generation = authGeneration;
   refreshPromise = (async () => {
     try {
-      const response = await fetch("/api/v1/auth/refresh", { method: "POST", credentials: "same-origin", cache: "no-store" });
-      if (!response.ok) { if (generation === authGeneration) accessToken = null; return false; }
+      const response = await fetch("/api/v1/auth/refresh", { method: "POST", credentials: "same-origin", cache: "no-store", signal: AbortSignal.timeout(10_000) });
+      if (response.status === 401) { if (generation === authGeneration) accessToken = null; return false; }
+      if (!response.ok) throw await responseError(response);
       const result = await response.json();
       if (generation !== authGeneration) return false;
       accessToken = result.access_token;
       return true;
-    } catch { return false; }
+    } catch (error) { throw error instanceof ApiError ? error : new ApiError(0, connectionMessage, "BACKEND_UNAVAILABLE"); }
     finally { refreshPromise = null; }
   })();
   return refreshPromise;
 }
 
 export async function api<T>(path: string, options: RequestInit = {}, retry = true): Promise<T> {
+  const generation = authGeneration;
   const headers = new Headers(options.headers);
   if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
   if (options.body && !(options.body instanceof FormData)) headers.set("Content-Type", "application/json");
   let response: Response;
   try {
     response = await fetch(`/api/v1${path}`, { ...options, headers, credentials: "same-origin", cache: "no-store" });
-  } catch { throw new ApiError(0, "연결이 끊어졌습니다. 입력 내용을 유지하고 있어요. 연결 후 다시 시도해 주세요."); }
+  } catch { throw new ApiError(0, connectionMessage, "BACKEND_UNAVAILABLE"); }
   if (response.status === 401 && retry && !path.startsWith("/auth/")) {
-    if (await refreshSession()) return api<T>(path, options, false);
+    if (generation !== authGeneration) throw new ApiError(401, "로그인 계정이 변경되었어요. 현재 계정에서 다시 요청해 주세요.", "SESSION_CHANGED");
+    const refreshed = await refreshSession();
+    if (generation !== authGeneration) throw new ApiError(401, "로그인 계정이 변경되었어요. 현재 계정에서 다시 요청해 주세요.", "SESSION_CHANGED");
+    if (refreshed) return api<T>(path, options, false);
   }
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ detail: "요청을 처리하지 못했습니다." }));
-    const message = Array.isArray(error.detail) ? error.detail.map((x: { msg: string }) => x.msg).join(" · ") : error.detail;
-    throw new ApiError(response.status, message || "요청을 처리하지 못했습니다.");
+    throw await responseError(response);
   }
   if (response.status === 204) return undefined as T;
   return response.json();

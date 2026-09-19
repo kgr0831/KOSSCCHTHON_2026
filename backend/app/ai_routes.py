@@ -6,6 +6,7 @@ from pydantic import Field
 from .ai import AIProvider, cli_command, get_ai, model_ids, read_api_key
 from .auth import Actor, Input
 from .common import DB, data, lock_user, required, update_revision
+from .config import get_settings
 from .models import AISettings, User
 
 router = APIRouter(prefix="/api/v1")
@@ -14,7 +15,10 @@ router = APIRouter(prefix="/api/v1")
 @router.get("/me/ai-settings")
 def settings(db: DB, user: Actor):
     row = db.get(AISettings, user.id)
-    return data(row) if row else {"transport": "api", "easy_model": "", "hard_model": "", "revision": 0}
+    result = data(row) if row else {"transport": "api", "easy_model": "", "hard_model": "", "revision": 0}
+    if get_settings().environment == "production":
+        result["transport"] = "api"
+    return result
 
 
 @router.get("/ai/providers")
@@ -26,7 +30,7 @@ def providers(user: Actor):
     except HTTPException as exc:
         error = exc.detail
     return {"api": {"configured": bool(read_api_key()), "models": available, "error": error},
-            "cli": {"claude_installed": bool(cli_command("claude")), "gemini_installed": bool(cli_command("gemini")),
+            "cli": {"allowed": get_settings().environment != "production", "claude_installed": bool(cli_command("claude")), "gemini_installed": bool(cli_command("gemini")),
                     "connection": "separate_local_login"},
             "routing": {"easy": "Gemini Flash · 미제공 시 Claude Haiku", "hard": "Claude Sonnet"},
             "consent_text": "생성에 필요한 프로필·선택 자료·작성 내용이 선택한 AI 제공자로 전송됩니다. 결과는 승인 전까지 확정 프로필에 반영하지 않습니다."}
@@ -44,6 +48,8 @@ def edit_settings(body: ProviderEdit, db: DB, user: Actor):
     from fastapi import HTTPException
 
     from .ai import choose_model
+    if get_settings().environment == "production" and body.transport != "api":
+        raise HTTPException(403, "배포 서버에서는 API 연결을 사용해 주세요. 구독 CLI는 로컬 실행 전용입니다.")
     lock_user(db, user.id)
     if body.transport == "api":
         if body.easy_model:

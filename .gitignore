@@ -20,3 +20,6 @@ playwright-report/
 *.tsbuildinfo
 coverage/
 dist/
+
+# Local work-in-progress handoff; do not publish.
+/WIP.md

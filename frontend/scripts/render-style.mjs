@@ -2,7 +2,7 @@ import { chromium } from "@playwright/test";
 
 let html = "";
 for await (const chunk of process.stdin) html += chunk;
-const browser = await chromium.launch({ channel: "msedge", headless: true });
+const browser = await chromium.launch({ channel: "msedge", headless: true }).catch(() => chromium.launch({ headless: true }));
 try {
   const context = await browser.newContext({ reducedMotion: "reduce" });
   await context.route("**/*", route => route.abort());

@@ -37,10 +37,14 @@ def model_ids() -> list[str]:
                             headers={"Authorization": f"Bearer {key}"}, timeout=20, follow_redirects=False)
         if response.status_code in (401, 403):
             raise HTTPException(503, "AI 키의 모델 접근 권한을 확인해 주세요.")
+        if response.status_code == 429:
+            raise HTTPException(503, "AI 사용량 또는 요청 한도에 도달했어요. 잠시 후 다시 시도해 주세요.")
         response.raise_for_status()
         ids = [row["id"] for row in response.json()["data"] if isinstance(row.get("id"), str)]
         _models_cache = (time.monotonic(), ids)
         return ids
+    except httpx.TimeoutException:
+        raise HTTPException(504, "AI 모델 목록 응답이 지연되고 있어요. 인터넷 연결을 확인하고 다시 시도해 주세요.") from None
     except (httpx.HTTPError, ValueError, KeyError, TypeError):
         raise HTTPException(503, "AI 모델 목록에 연결할 수 없습니다. 키 값은 표시하지 않습니다.") from None
 
@@ -126,6 +130,10 @@ class AIProvider:
             with httpx.Client(timeout=settings.ai_timeout_seconds, follow_redirects=False) as client:
                 response = client.post(settings.ai_base_url.rstrip("/") + "/chat/completions",
                     headers={"Authorization": f"Bearer {read_api_key()}"}, json=payload)
+                if response.status_code in (401, 403):
+                    raise HTTPException(503, "이 PC의 AI 키가 만료됐거나 모델 권한이 없어요. .env의 DUDRI_AI_API_KEY를 확인해 주세요.")
+                if response.status_code == 429:
+                    raise HTTPException(503, "AI 사용량 또는 요청 한도에 도달했어요. 잠시 후 다시 시도해 주세요.")
                 response.raise_for_status()
                 content = response.json()["choices"][0]["message"]["content"]
                 if isinstance(content, list):
@@ -133,10 +141,14 @@ class AIProvider:
                 if not isinstance(content, str):
                     raise ValueError("Missing content")
                 return content
+        except httpx.TimeoutException:
+            raise HTTPException(504, "AI 응답 시간이 초과됐어요. 모델 설정을 확인하거나 잠시 후 다시 시도해 주세요.") from None
         except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError):
             raise HTTPException(502, "AI 제공자가 응답하지 않았습니다. 입력은 저장되어 있어요. 모델 설정을 확인하거나 다시 시도해 주세요.") from None
 
     def _cli(self, system, inputs, complexity):
+        if get_settings().environment == "production":
+            raise HTTPException(403, "배포 서버에서는 서버 API 연결을 사용해 주세요. 구독 CLI는 로컬 실행에서 사용할 수 있어요.")
         family = "claude" if complexity == "hard" else "gemini"
         command = cli_command(family)
         if not command:
@@ -183,6 +195,8 @@ class AIProvider:
 def provider_for(db, user_id):
     from .models import AISettings
     row = db.get(AISettings, user_id)
+    if get_settings().environment == "production":
+        return AIProvider("api", row.easy_model if row else "", row.hard_model if row else "")
     return AIProvider(row.transport, row.easy_model, row.hard_model) if row else AIProvider()
 
 

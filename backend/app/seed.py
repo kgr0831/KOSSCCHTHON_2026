@@ -45,7 +45,7 @@ PEOPLE = [
 DEMO_USERS = [demo_id(f"user/{i}") for i in range(len(PEOPLE))]
 
 
-def seed(db):
+def catalog(db):
     schools = {}
     for name, domain in [("국민대학교", "kookmin.ac.kr"), ("숭실대학교", "soongsil.ac.kr"), ("순천향대학교", "sch.ac.kr")]:
         school = db.scalar(select(University).where(University.name == name))
@@ -65,6 +65,11 @@ def seed(db):
                 db.add(tag)
                 db.flush()
             tags[kind, name] = tag.id
+    return schools, tags
+
+
+def seed(db):
+    schools, tags = catalog(db)
     for i, (name, school, department, role, bio, skill, stage) in enumerate(PEOPLE):
         user_id = DEMO_USERS[i]
         if db.get(User, user_id):

@@ -1,7 +1,9 @@
 """Private design documents and durable reference images rendered from real AI output."""
 import json
+import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -14,6 +16,7 @@ from .ai import provider_for
 from .auth import Actor, Input
 from .common import DB, lock_user
 from .config import get_settings
+from .job_lease import locked_lease
 from .models import Job, Material, now
 from .site_render import html_document, validate_code
 from .sites import Code
@@ -86,16 +89,28 @@ def reference_images(code):
     node = shutil.which("node")
     if not node:
         raise HTTPException(503, "예시 이미지 생성에 Node.js가 필요해요.")
-    result = subprocess.run([sys.executable, str(Path(__file__).with_name("cli_runner.py")), node, str(get_settings().project_root / "frontend/scripts/render-style.mjs")],
-                            input=html_document(code), encoding="utf-8", capture_output=True, timeout=45)
-    if result.returncode:
+    process = subprocess.Popen([sys.executable, str(Path(__file__).with_name("cli_runner.py")), node, str(get_settings().project_root / "frontend/scripts/render-style.mjs")],
+                               stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding="utf-8",
+                               start_new_session=os.name != "nt")
+    try:
+        output, _ = process.communicate(html_document(code), timeout=45)
+    except subprocess.TimeoutExpired:
+        if os.name == "nt":
+            process.kill()
+        else:
+            os.killpg(process.pid, signal.SIGKILL)
+        process.communicate()
+        raise HTTPException(504, "예시 이미지 생성 시간이 초과됐어요. 다시 시도해 주세요.") from None
+    if process.returncode:
         raise HTTPException(503, "예시 이미지를 만들지 못했어요. Edge 설치를 확인하고 다시 시도해 주세요.")
-    return json.loads(result.stdout)
+    return json.loads(output)
 
 
 def perform_style(factory, job_id, token):
     with factory.begin() as db:
-        job = db.get(Job, job_id)
+        job = locked_lease(db, job_id, token)
+        if not job:
+            return
         user = lock_user(db, job.user_id)
         row = db.get(Material, job.target_id)
         if row.user_id != user.id or user.account_status != "active" or row.access_status != "available":
@@ -115,8 +130,8 @@ def perform_style(factory, job_id, token):
         raise HTTPException(422, "예시 화면을 검증하지 못했어요. 다시 시도해 주세요.")
     images = reference_images(code)
     with factory.begin() as db:
-        job = db.get(Job, job_id)
-        if job.lease_token != token or job.status != "running":
+        job = locked_lease(db, job_id, token)
+        if not job:
             return
         user = lock_user(db, job.user_id)
         row = db.get(Material, job.target_id)

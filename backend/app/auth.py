@@ -1,6 +1,7 @@
 import hashlib
 import secrets
 import smtplib
+import ssl
 from datetime import timedelta
 from email.message import EmailMessage
 from typing import Annotated, Literal
@@ -52,7 +53,7 @@ class Mailer:
         try:
             with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=15) as smtp:
                 if settings.smtp_starttls:
-                    smtp.starttls()
+                    smtp.starttls(context=ssl.create_default_context())
                 if settings.smtp_username:
                     smtp.login(settings.smtp_username, settings.smtp_password)
                 smtp.send_message(message)
@@ -203,6 +204,8 @@ def school_confirm(body: TokenInput, db: DB, response: Response):
 
 @router.get("/auth/school-email-verifications/confirm")
 def school_confirm_legacy(token: str, db: DB, response: Response):
+    if get_settings().environment == "production":
+        raise HTTPException(405, "화면의 이메일 확인 흐름을 이용해 주세요.")
     return confirm_school(token, db, response)
 
 
@@ -229,6 +232,8 @@ def login_confirm(body: TokenInput, db: DB, response: Response):
 
 @router.get("/auth/login-links/confirm")
 def login_confirm_legacy(token: str, db: DB, response: Response):
+    if get_settings().environment == "production":
+        raise HTTPException(405, "화면의 이메일 확인 흐름을 이용해 주세요.")
     return confirm_login(token, db, response)
 
 
@@ -251,6 +256,8 @@ def company_confirm(body: TokenInput, db: DB):
 
 @router.get("/auth/company-email-verifications/confirm")
 def company_confirm_legacy(token: str, db: DB):
+    if get_settings().environment == "production":
+        raise HTTPException(405, "화면의 이메일 확인 흐름을 이용해 주세요.")
     return confirm_company(token, db)
 
 

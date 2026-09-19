@@ -353,7 +353,7 @@ class PersonalSite(Entity, Base):
     site_kind: Mapped[str]
     slug: Mapped[str] = mapped_column(unique=True)
     revision: Mapped[int] = mapped_column(default=1)
-    published_version_id: Mapped[str | None] = mapped_column(ForeignKey("site_versions.id", use_alter=True))
+    published_version_id: Mapped[str | None] = mapped_column(ForeignKey("site_versions.id", use_alter=True, name="fk_personal_sites_published_version"))
 
 
 class SiteVersion(Entity, Base):

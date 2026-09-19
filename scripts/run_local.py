@@ -1,4 +1,4 @@
-"""One terminal: persistent SQLite, API, worker, isolated sites and Next.js."""
+"""One terminal: configured database, API, worker, isolated sites and Next.js."""
 import argparse
 import hashlib
 import json
@@ -15,14 +15,27 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
+from sqlalchemy.engine import make_url  # noqa: E402
+
+from app.config import get_settings  # noqa: E402
 from app.windows_job import WindowsJob  # noqa: E402 - standalone script resolves the repository first
 
 
 def instance_key(ports):
     # A non-secret identifier for this workspace and exact port set. Never used
     # as authentication or permission to stop an existing process.
-    value = f"{os.path.normcase(str(ROOT))}|{','.join(map(str, ports))}"
+    dotenv = ROOT / ".env"
+    modified = dotenv.stat().st_mtime_ns if dotenv.is_file() else 0
+    database = make_url(get_settings().database_url).set(password=None)
+    value = f"{os.path.normcase(str(ROOT))}|{','.join(map(str, ports))}|{database}|{modified}"
     return hashlib.sha256(value.encode()).hexdigest()
+
+
+def frontend_environment(env):
+    # Next only needs its API proxy target. Keep server credentials out of its process.
+    return {key: value for key, value in env.items()
+            if key == "DUDRI_SITE_ORIGIN" or
+            (not key.upper().startswith(("DUDRI_", "SUPABASE_")) and key.upper() not in ("DATABASE_URL", "KOSS_AI_API_KEY"))}
 
 
 def port_in_use(port):
@@ -62,6 +75,8 @@ def open_browser(url):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--no-browser", action="store_true")
+    parser.add_argument("--reuse-only", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--import-sqlite", action="store_true", help="Copy saved SQLite data into an empty PostgreSQL DB before starting")
     parser.add_argument("--port", type=int, default=3000)
     parser.add_argument("--api-port", type=int, default=8000)
     parser.add_argument("--site-port", type=int, default=8001)
@@ -72,6 +87,8 @@ def main():
     identity = instance_key(ports)
     occupied = [port for port in ports if port_in_use(port)]
     if occupied:
+        if args.import_sqlite:
+            raise SystemExit("Stop the existing app before importing SQLite data.")
         existing = running_instance(ports, identity)
         if existing:
             url = f"http://localhost:{args.port}"
@@ -80,9 +97,11 @@ def main():
             if not args.no_browser:
                 open_browser(url)
             return
-        raise SystemExit(f"Port(s) {', '.join(map(str, occupied))} are in use by another app or a server still starting.\n"
+        raise SystemExit(f"Port(s) {', '.join(map(str, occupied))} are in use by another app, a server still starting, or an earlier DB configuration.\n"
                          "No existing process was stopped. Close its terminal, or run:\n"
                          "start-local.bat --port 3002 --api-port 8002 --site-port 8003")
+    if args.reuse_only:
+        raise SystemExit("[local] This workspace is already installing or running. Wait for its original terminal, or close it before starting another port set. No runtime or dependencies were changed.")
     # A repeated launch returns above without taking ownership of any processes.
     job = WindowsJob()
     assert os.name != "nt" or job.handle
@@ -95,16 +114,28 @@ def main():
                DUDRI_APP_ORIGIN=f"http://localhost:{args.port}", DUDRI_SITE_ORIGIN=f"http://127.0.0.1:{args.site_port}",
                API_ORIGIN=f"http://127.0.0.1:{args.api_port}")
     env.update(DUDRI_LOCAL_INSTANCE=identity, DUDRI_LOCAL_SUPERVISOR=str(os.getpid()))
-    # Absolute SQLite URL prevents cwd changes from creating a second database.
-    env.setdefault("DUDRI_DATABASE_URL", f"sqlite:///{(ROOT / 'backend/.data/dudri.db').as_posix()}")
-    print("[local] Preparing persistent database and fictional demo accounts...", flush=True)
-    subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], cwd=ROOT / "backend", env=env, check=True)
-    subprocess.run([sys.executable, "-m", "app.seed"], cwd=ROOT / "backend", env=env, check=True)
+    # Settings reads the root .env directly; do not shadow it with a SQLite env default.
+    database_kind = "PostgreSQL" if get_settings().database_url.startswith("postgresql") else "SQLite"
+    front_env = frontend_environment(env)
+    print(f"[local] Preparing {database_kind} and fictional demo accounts...", flush=True)
+    subprocess.run([sys.executable, "-m", "app.prepare_database", *(["--import-sqlite"] if args.import_sqlite else [])],
+                   cwd=ROOT / "backend", env=env, check=True)
     next_entry = ROOT / "frontend/node_modules/next/dist/bin/next"
-    if not next_entry.is_file():
+    lock_hash = hashlib.sha256((ROOT / "frontend/package-lock.json").read_bytes()).hexdigest()
+    install_stamp = ROOT / "frontend/node_modules/.dudri-lock"
+    if not next_entry.is_file() or not install_stamp.is_file() or install_stamp.read_text() != lock_hash:
         print("[local] Installing frontend packages...", flush=True)
-        subprocess.run(["cmd.exe", "/d", "/c", "npm.cmd", "ci"] if os.name == "nt" else ["npm", "ci"],
-                       cwd=ROOT / "frontend", env=env, check=True)
+        subprocess.run(["cmd.exe", "/d", "/c", "npm.cmd", "ci", "--include=dev", "--include=optional"] if os.name == "nt" else ["npm", "ci", "--include=dev", "--include=optional"],
+                       cwd=ROOT / "frontend", env=front_env, check=True)
+        install_stamp.write_text(lock_hash)
+    if os.name == "nt":
+        check = [node, "-e", "try { require('@next/swc-win32-x64-msvc'); } catch { process.exit(1); }"]
+        if subprocess.run(check, cwd=ROOT / "frontend", env=front_env, check=False).returncode:
+            powershell = str(Path(os.environ["SystemRoot"]) / "System32/WindowsPowerShell/v1.0/powershell.exe")
+            subprocess.run([powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ROOT / "scripts/ensure-vc-runtime.ps1")], check=True)
+            if subprocess.run(check, cwd=ROOT / "frontend", env=front_env, check=False).returncode:
+                raise SystemExit("[setup] Next.js native runtime could not load. Restart Windows if requested and retry.")
+    subprocess.run([node, str(ROOT / "frontend/scripts/ensure-browser.mjs")], cwd=ROOT / "frontend", env=front_env, check=True)
     children = []
     try:
         for module, port in [("app.main:app", args.api_port), ("app.site_server:app", args.site_port)]:
@@ -112,24 +143,30 @@ def main():
                                                "--no-access-log"], cwd=ROOT / "backend", env=env))
         children.append(subprocess.Popen([sys.executable, "-m", "app.worker"], cwd=ROOT / "backend", env=env))
         children.append(subprocess.Popen([node, str(next_entry), "dev", "--hostname", "127.0.0.1", "--port", str(args.port)],
-                                         cwd=ROOT / "frontend", env=env))
+                                         cwd=ROOT / "frontend", env=front_env))
         deadline = time.monotonic() + 180
         waiting = {f"http://127.0.0.1:{p}/" for p in ports}
+        waiting.update(f"http://127.0.0.1:{p}/api/v1/health" for p in ports[:2])
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         while waiting:
             if any(p.poll() is not None for p in children):
                 raise RuntimeError("A service exited before it was ready.")
             for url in list(waiting):
                 try:
-                    with urllib.request.urlopen(url, timeout=1) as response:
-                        if response.status == 200:
+                    with opener.open(url, timeout=2) as response:
+                        if response.status == 200 and (not url.endswith("/health") or
+                                json.loads(response.read(4096)).get("database") == "ok"):
                             waiting.remove(url)
-                except (OSError, urllib.error.URLError):
+                except (OSError, ValueError, AttributeError, urllib.error.URLError):
                     pass
             if time.monotonic() > deadline:
                 raise RuntimeError("Services did not become ready within 180 seconds.")
             time.sleep(0.25)
         url = f"http://localhost:{args.port}"
-        print(f"[local] READY {url} | API {args.api_port} | Sites {args.site_port} | SQLite persisted", flush=True)
+        print(f"[local] READY {url} | API {args.api_port} | Sites {args.site_port} | {database_kind}", flush=True)
+        from app.ai import read_api_key
+        print("[local] AI API key configured. Check AI connection settings in the app to verify provider access."
+              if read_api_key() else "[local] AI setup needed: add DUDRI_AI_API_KEY to the root .env, or install and log in to a supported CLI on this PC.", flush=True)
         if not args.no_browser:
             open_browser(url)
         print("[local] Close this terminal or press Ctrl+C to stop all owned services.", flush=True)

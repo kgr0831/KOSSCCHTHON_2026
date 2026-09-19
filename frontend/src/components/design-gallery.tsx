@@ -7,6 +7,7 @@ import { api, jsonBody } from "@/lib/api";
 import type { Style } from "@/lib/studio";
 import { ErrorMessage, Field } from "./ui";
 import { useFeedback } from "./feedback";
+import StyleBuilder from "./style-builder";
 
 export default function DesignGallery({ styles, selected, onSelect }: { styles: Style[]; selected: string; onSelect: (id: string) => void }) {
   const client = useQueryClient(), feedback = useFeedback();
@@ -36,7 +37,7 @@ export default function DesignGallery({ styles, selected, onSelect }: { styles: 
     setReferenceId(style.id); setMarkdown(""); setDetailError(null); if (!dialog.current?.open) dialog.current?.showModal();
     try { const detail = await api<Style & { markdown: string }>(`/portfolio-styles/${style.id}`); if (request === detailRequest.current) setMarkdown(detail.markdown || ""); } catch (error) { if (request === detailRequest.current) setDetailError(error); }
   }
-  return <><div className="style-gallery">{styles.map(style => <article className={`style-card ${selected === style.id ? "selected" : ""}`} key={style.id}>
+  return <><StyleBuilder styles={styles} onSelect={onSelect} /><div className="style-gallery">{styles.filter(style => style.id !== "editorial").map(style => <article className={`style-card ${selected === style.id ? "selected" : ""}`} key={style.id}>
     <button className="style-select" aria-pressed={selected === style.id} onClick={() => onSelect(style.id)}>{style.reference_image ? <img src={style.reference_image} alt={`${style.name} 스타일의 포트폴리오 예시`} /> : <div className="style-placeholder">{style.status === "queued" || style.status === "running" ? <><LoaderCircle className="spin" size={22} />예시 이미지 생성 중</> : "디자인 MD 저장됨"}</div>}<span><strong>{style.name}</strong>{selected === style.id && <Check size={18} />}</span><small>{style.description}</small></button>
     <button className="text-link" onClick={() => openReference(style)}>{style.reference_image ? "PC · 모바일 예시 크게 보기" : "디자인 문서 보기"}<Eye size={14} /></button>
     {(style.status === "failed" || style.status === "missing") && <button className="text-link" disabled={busy} onClick={() => createReference(style)}>예시 이미지 {style.status === "failed" ? "다시 만들기" : "만들기"}</button>}

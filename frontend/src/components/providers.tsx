@@ -6,19 +6,41 @@ import { NavigationProvider } from "./app-navigation";
 import { FeedbackProvider } from "./feedback";
 import { api, ApiError, refreshSession, setAccessToken, type UserSelf } from "@/lib/api";
 
-const AuthContext = createContext<{ user?: UserSelf; ready: boolean; login: (token: string) => Promise<void>; logout: () => Promise<void> }>({ ready: false, login: async () => {}, logout: async () => {} });
+const AuthContext = createContext<{ user?: UserSelf; ready: boolean; connectionError: string; reconnect: () => void; login: (token: string) => Promise<void>; logout: () => Promise<void> }>({ ready: false, connectionError: "", reconnect: () => {}, login: async () => {}, logout: async () => {} });
 export const useAuth = () => useContext(AuthContext);
 
 function SessionProvider({ children }: { children: React.ReactNode }) {
   const client = useQueryClient();
   const [ready, setReady] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
+  const [connectionError, setConnectionError] = useState("");
+  const [reconnectAttempt, setReconnectAttempt] = useState(0);
   const epoch = useRef(0);
-  useEffect(() => { let active = true; const generation = epoch.current; refreshSession().then(ok => { if (active && generation === epoch.current) { setAuthenticated(ok); setReady(true); } }); return () => { active = false; }; }, []);
+  useEffect(() => {
+    let active = true;
+    const generation = epoch.current;
+    refreshSession().then(async ok => {
+      if (!active || generation !== epoch.current) return;
+      // Finish identity refresh before enabling any cached account queries.
+      await client.cancelQueries();
+      if (!active || generation !== epoch.current) return;
+      client.clear();
+      if (ok) {
+        const identity = await api<UserSelf>("/me", {}, false);
+        if (!active || generation !== epoch.current) return;
+        client.setQueryData(["me"], identity);
+      }
+      setAuthenticated(ok); setConnectionError(""); setReady(true);
+    }).catch(error => {
+      if (active && generation === epoch.current) { setConnectionError(error.message); setReady(true); }
+    });
+    return () => { active = false; };
+  }, [client, reconnectAttempt]);
   const me = useQuery({ queryKey: ["me"], queryFn: () => api<UserSelf>("/me"), enabled: ready && authenticated, retry: false });
-  const login = useCallback(async (token: string) => { epoch.current++; client.clear(); setAccessToken(token); setAuthenticated(true); setReady(true); await client.fetchQuery({ queryKey: ["me"], queryFn: () => api<UserSelf>("/me") }); }, [client]);
+  const login = useCallback(async (token: string) => { epoch.current++; client.clear(); setAccessToken(token); setAuthenticated(true); setReady(true); await client.fetchQuery({ queryKey: ["me"], queryFn: () => api<UserSelf>("/me") }); setConnectionError(""); }, [client]);
   const logout = useCallback(async () => { epoch.current++; await api("/auth/logout", { method: "POST" }); setAccessToken(null); client.clear(); setAuthenticated(false); setReady(true); }, [client]);
-  return <AuthContext.Provider value={{ user: me.data, ready: ready && (!authenticated || !me.isPending), login, logout }}>{children}</AuthContext.Provider>;
+  const reconnect = useCallback(() => { epoch.current++; setReady(false); setAuthenticated(false); setReconnectAttempt(attempt => attempt + 1); }, []);
+  return <AuthContext.Provider value={{ user: ready && authenticated ? me.data : undefined, ready: ready && (!authenticated || !me.isPending), connectionError: connectionError || (me.error?.message ?? ""), reconnect, login, logout }}>{children}</AuthContext.Provider>;
 }
 
 export default function Providers({ children }: { children: React.ReactNode }) {

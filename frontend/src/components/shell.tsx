@@ -21,7 +21,7 @@ const personal = [
 
 export default function Shell({ children }: { children: React.ReactNode }) {
   const path = usePathname();
-  const { user, logout, ready } = useAuth();
+  const { user, logout, ready, connectionError, reconnect } = useAuth();
   const { authOpen, closeAuth } = useAppNavigation();
   const authDialog = useRef<HTMLDialogElement>(null);
   useEffect(() => { if (authOpen && !authDialog.current?.open) authDialog.current?.showModal(); else if (!authOpen) authDialog.current?.close(); }, [authOpen]);
@@ -48,7 +48,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
     </aside>
     <div className="main-frame"><header className="topbar"><div className="mobile-brand"><Brand /></div><p className="topbar-context"><span className="live-dot" /> {isActive("/my") ? "나의 공간" : "두드리"}<ChevronRight size={14} /><strong>{location}</strong></p><div className="topbar-actions"><Link href="/notifications" className="icon-button notification-button" aria-label="알림"><Bell size={19} /></Link>{!ready ? <span className="avatar small account-placeholder" /> : user ? <Link href="/my" className="avatar small" aria-label="마이 페이지">{user.profile.display_name.slice(0, 1)}</Link> : <Link href="/auth" className="text-link">로그인</Link>}</div></header>
       <div className="mobile-location" aria-label="현재 화면">{isActive("/my") && <span>나의 공간 <ChevronRight size={12} /></span>}<strong>{location}</strong></div>
-      <main id="main" className="main-content">{error && <p role="alert" className="notice error">{error}</p>}<AppOutlet fallback={children} /></main><footer className="footer"><span>두드리 · 서로의 경험이 다음 가능성이 되는 곳</span><span>함께, 한 걸음 더</span></footer>
+      <main id="main" className="main-content">{connectionError && <div role="alert" className="notice error"><p>{connectionError}</p><button className="button subtle" onClick={reconnect}>다시 연결</button></div>}{error && <p role="alert" className="notice error">{error}</p>}<AppOutlet fallback={children} /></main><footer className="footer"><span>두드리 · 서로의 경험이 다음 가능성이 되는 곳</span><span>함께, 한 걸음 더</span></footer>
     </div>
     <nav className="bottom-nav" aria-label="모바일 주요 메뉴">{navigation.slice(0, 2).map(item)}{register(true)}{navigation.slice(2).map(item)}</nav>
     <dialog ref={authDialog} className="auth-dialog" aria-labelledby="auth-dialog-title" onCancel={event => { event.preventDefault(); closeAuth(); }} onClick={event => { if (event.target === event.currentTarget) closeAuth(); }}><div className="auth-dialog-heading"><h2 id="auth-dialog-title">로그인 · 회원가입</h2><button className="icon-button" autoFocus aria-label="로그인 닫기" onClick={closeAuth}><X size={20} /></button></div>{authOpen && <AuthPage />}</dialog>

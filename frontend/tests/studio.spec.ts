@@ -31,6 +31,11 @@ for (const width of [390, 1440]) {
     await page.screenshot({ path: testInfo.outputPath(`studio-${width}.png`), fullPage: true });
     await page.getByRole("button", { name: /PC · 모바일 예시 크게 보기/ }).first().click();
     await expect(page.getByRole("dialog")).toBeVisible();
+    await expect.poll(async () => {
+      const box = await page.getByRole("dialog").boundingBox();
+      const center = await page.evaluate(() => ({ x: innerWidth / 2, y: innerHeight / 2 }));
+      return Math.abs(box!.x + box!.width / 2 - center.x) + Math.abs(box!.y + box!.height / 2 - center.y);
+    }).toBeLessThan(3);
     await page.keyboard.press("Escape");
     await page.getByRole("button", { name: /버전 1/ }).click();
     await expect(page.getByTitle("저장된 문서 미리보기")).toHaveAttribute("sandbox", "allow-scripts");
@@ -42,6 +47,52 @@ for (const width of [390, 1440]) {
     await page.screenshot({ path: testInfo.outputPath(`studio-editor-${width}.png`), fullPage: true });
   });
 }
+
+for (const width of [390, 1440]) {
+  test(`custom style dialog saves selected options at ${width}`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 1000 });
+    await fixtures(page);
+    let uploaded = "";
+    const created = { id: "uploaded-fixture-style", name: "나의 작업 갤러리", status: "queued", description: "custom" };
+    await page.route("**/api/v1/portfolio-styles/upload", async route => {
+      uploaded = route.request().postData() || "";
+      await route.fulfill({ status: 202, json: created });
+    });
+    await page.goto("/studio");
+    await page.getByRole("button", { name: /원하는 스타일 만들기/ }).click();
+    const dialog = page.getByRole("dialog", { name: "나만의 디자인 스타일" });
+    await expect(dialog).toBeVisible();
+    await expect.poll(async () => { const box = await dialog.boundingBox(); const center = await page.evaluate(() => ({ x: innerWidth / 2, y: innerHeight / 2 })); return Math.abs(box!.x + box!.width / 2 - center.x) + Math.abs(box!.y + box!.height / 2 - center.y); }).toBeLessThan(3);
+    await dialog.getByRole("button", { name: "취소", exact: true }).click();
+    expect(uploaded).toBe("");
+    await page.getByRole("button", { name: /원하는 스타일 만들기/ }).click();
+    await dialog.getByLabel("스타일 이름").fill("나의 작업 갤러리");
+    await dialog.getByLabel("분위기", { exact: true }).selectOption("대담하고 창의적인");
+    await dialog.getByLabel("추가로 원하는 점", { exact: false }).fill("대표 작업 세 개를 강조해 주세요.");
+    await dialog.getByRole("checkbox").check();
+    await page.route("**/api/v1/portfolio-styles", route => route.fulfill({ json: { items: [created] } }));
+    await dialog.getByRole("button", { name: "스타일 저장 · 예시 만들기" }).click();
+    await expect(dialog).not.toBeVisible();
+    await expect(page.locator(".style-card.selected")).toContainText("나의 작업 갤러리");
+    expect(uploaded).toContain("대담하고 창의적인");
+    expect(uploaded).toContain("대표 작업 세 개를 강조해 주세요.");
+    expect(uploaded).toContain("#faf8ff");
+  });
+}
+
+test("backend outage is visible and session reconnect recovers", async ({ page }) => {
+  await fixtures(page);
+  let online = false;
+  await page.route("**/api/v1/auth/refresh", route => online
+    ? route.fulfill({ json: { access_token: "fixture-only" } })
+    : route.fulfill({ status: 502, contentType: "text/plain", body: "Bad gateway" }));
+  await page.goto("/");
+  await expect(page.getByRole("alert").filter({ hasText: "백엔드 서버에 연결하지 못했어요" })).toBeVisible();
+  online = true;
+  await page.getByRole("button", { name: "다시 연결", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "안녕하세요, 김민준님" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "다시 연결", exact: true })).toHaveCount(0);
+});
 
 test("generated script cannot navigate its preview to an external URL", async ({ page }) => {
   await fixtures(page);

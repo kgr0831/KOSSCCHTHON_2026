@@ -17,6 +17,21 @@ html { scrollbar-gutter:stable; }
 @keyframes view-enter { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
 @keyframes dialog-enter { from { opacity:0; transform:translateY(16px) scale(.98); } to { opacity:1; transform:translateY(0) scale(1); } }
 dialog[open] { animation:dialog-enter .22s ease-out; }
+.reference-dialog,.style-builder-dialog { position:fixed; inset:auto; top:50dvh; left:50vw; translate:-50% -50%; margin:0; width:min(1120px,calc(100vw - 32px)); max-width:calc(100vw - 32px); max-height:calc(100dvh - 32px); }
+.style-builder-dialog { width:min(680px,calc(100vw - 32px)); border:1px solid var(--line); border-radius:24px; padding:24px; overflow:auto; background:#fcfaff; color:var(--ink); }
+.style-builder-dialog::backdrop { background:#22133180; backdrop-filter:blur(4px); }
+.style-builder-dialog h2 { font-size:20px; }
+.style-builder-launch { width:100%; display:flex; gap:16px; align-items:center; text-align:left; padding:20px; margin-bottom:18px; border:1px dashed #b6a0d5; border-radius:18px; background:#f4eefa; color:var(--primary); }
+.style-builder-launch span:first-of-type { flex:1; }
+.style-builder-launch strong,.style-builder-launch small { display:block; }
+.style-builder-launch small { margin-top:5px; color:var(--muted); line-height:1.6; }
+.style-builder-fields { border:0; padding:0; margin:0; display:grid; gap:16px; min-width:0; }
+.style-builder-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
+.style-builder-grid input[type=color] { width:100%; min-height:42px; padding:4px; }
+.style-draft-preview { border:1px solid; border-radius:14px; padding:20px; display:grid; gap:8px; color:#26232c; }
+.style-draft-preview strong,.style-draft-preview small { background:#ffffffed; padding:5px 8px; border-radius:6px; width:fit-content; overflow-wrap:anywhere; }
+.style-draft-preview>span { width:34px; height:8px; border-radius:4px; }
+@media(max-width:480px) { .style-builder-dialog { padding:18px; }.style-builder-grid { grid-template-columns:1fr; }.style-builder-launch { padding:16px; gap:10px; } }
 .auth-dialog,.feedback-dialog { border:1px solid var(--line); border-radius:28px; background:#fcfaff; color:var(--ink); padding:28px; margin:auto; max-height:calc(100dvh - 40px); overflow:auto; box-shadow:0 28px 90px #2d174a33; }
 .auth-dialog { width:min(920px,calc(100% - 32px)); }
 .auth-dialog::backdrop,.feedback-dialog::backdrop { background:#22133180; backdrop-filter:blur(5px); }

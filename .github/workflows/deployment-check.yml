@@ -1,0 +1,39 @@
+name: Deployment check
+on:
+  push:
+    branches: ["feat/MVP"]
+    paths: ["backend/**", "frontend/**", "scripts/run_deployed.py", "scripts/verify_container.sh", "Dockerfile", ".dockerignore", "render.yaml", ".github/workflows/deployment-check.yml"]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: dudri_ci
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: disposable_ci_fixture
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d dudri_ci"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Build Linux runtime and run backend tests
+        run: docker build --target validation -t dudri-validation .
+      - name: Verify PostgreSQL migrations, private grants and data transfer
+        run: >-
+          docker run --rm --network host --entrypoint python
+          -e DUDRI_ENVIRONMENT=test
+          -e DUDRI_TEST_POSTGRES_URL=postgresql://postgres:disposable_ci_fixture@127.0.0.1:5432/dudri_ci
+          dudri-validation -m pytest /app/backend/tests/test_postgres.py -q
+      - name: Build deployable image
+        run: docker build --target production -t dudri-production .
+      - name: Verify free-tier runtime and renderer limits
+        run: bash scripts/verify_container.sh

@@ -1,0 +1,25 @@
+# Free only: one backend instance; frontend deploys separately to Vercel Hobby.
+# Keep paid upgrades disabled and stay within the workspace's free limits.
+services:
+  - type: web
+    name: dudri-api
+    runtime: docker
+    plan: free
+    region: singapore
+    branch: feat/MVP
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/v1/health
+    autoDeployTrigger: off
+    envVars:
+      - key: DUDRI_SERVICE_ROLE
+        value: api
+      - key: DUDRI_APP_ORIGIN
+        sync: false
+      - key: DUDRI_DATABASE_URL
+        sync: false
+      - key: DUDRI_AI_API_KEY
+        sync: false
+      - key: DUDRI_AI_BASE_URL
+        value: https://ai.cs.kookmin.ac.kr/v1
+      - key: DUDRI_CREDENTIAL_ENCRYPTION_KEY
+        generateValue: true

@@ -13,6 +13,7 @@ from starlette.concurrency import run_in_threadpool
 from .ai import provider_for
 from .auth import Actor, Input
 from .common import DB, data, facts_changed, lock_user, owner, required, update_revision
+from .job_lease import locked_lease
 from .models import AnalysisInput, AnalysisRun, CareerEvent, Job, Material, Profile, Suggestion
 
 router = APIRouter(prefix="/api/v1")
@@ -133,7 +134,9 @@ def checked_inputs(db, run):
 
 def perform_analysis(factory, job_id, token):
     with factory.begin() as db:
-        job = db.get(Job, job_id)
+        job = locked_lease(db, job_id, token)
+        if not job:
+            return
         run = db.get(AnalysisRun, job.target_id)
         user = lock_user(db, run.user_id)
         if user.account_status != "active":
@@ -145,8 +148,8 @@ def perform_analysis(factory, job_id, token):
     result = ai.generate("자료에서 자기소개와 활동 경험 제안만 추출하세요. 확정 사실로 저장되지 않습니다. quote는 해당 material_id의 원문에서 그대로 인용해야 합니다. 날짜·기관·자격을 추측하지 마세요.",
                          {"materials": inputs}, AnalysisResult, complexity="easy")
     with factory.begin() as db:
-        job = db.get(Job, job_id)
-        if job.lease_token != token or job.status != "running":
+        job = locked_lease(db, job_id, token)
+        if not job:
             return
         run = db.get(AnalysisRun, job.target_id)
         lock_user(db, run.user_id)

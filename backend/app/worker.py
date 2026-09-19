@@ -10,6 +10,7 @@ from .ai import provider_for
 from .common import lock_user
 from .config import get_settings
 from .db import session_factory
+from .job_lease import locked_lease
 from .models import Job, PersonalSite, SiteVersion, now
 from .site_prompts import site_prompt
 from .site_render import safe_markup, update_fields, validate_code
@@ -42,6 +43,8 @@ def process_one(factory=None):
         if kind != "site":
             raise HTTPException(422, "지원하지 않는 작업입니다.")
         with factory.begin() as db:
+            if not locked_lease(db, job_id, token):
+                return True
             user = lock_user(db, user_id)
             version = db.get(SiteVersion, target_id)
             site = db.get(PersonalSite, version.site_id)
@@ -58,10 +61,10 @@ def process_one(factory=None):
         code["html"] = safe_markup(code["html"])
         error = validate_code(code)
         with factory.begin() as db:
-            user = lock_user(db, user_id)
-            job = db.get(Job, job_id)
-            if job.lease_token != token or job.status != "running":
+            job = locked_lease(db, job_id, token)
+            if not job:
                 return True
+            user = lock_user(db, user_id)
             version = db.get(SiteVersion, target_id)
             site = db.get(PersonalSite, version.site_id)
             stale = version.facts_revision != user.facts_revision or user.account_status != "active"
@@ -75,8 +78,8 @@ def process_one(factory=None):
         # Never persist provider bodies, prompts, CLI output, or secrets.
         message = str(exc.detail) if isinstance(exc, HTTPException) else "생성 작업을 마치지 못했습니다. 저장된 입력으로 다시 시도해 주세요."
         with factory.begin() as db:
-            job = db.get(Job, job_id)
-            if job and job.lease_token == token and job.status == "running":
+            job = locked_lease(db, job_id, token)
+            if job:
                 job.status, job.error, job.lease_until = "failed", message, None
                 if kind == "site":
                     version = db.get(SiteVersion, target_id)
@@ -93,7 +96,7 @@ def process_one(factory=None):
 
 
 def main():
-    print("[worker] Ready. Pending work is stored in the local database.", flush=True)
+    print("[worker] Ready. Pending work is stored in the configured database.", flush=True)
     while True:
         try:
             if not process_one():
