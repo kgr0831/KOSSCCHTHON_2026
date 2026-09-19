@@ -1,3 +1,4 @@
+# Required deployment gate for the production frontend and backend services.
 name: Deployment check
 on:
   push:
