@@ -1,4 +1,5 @@
 import logging
+from contextlib import asynccontextmanager
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
@@ -90,8 +91,17 @@ class UploadBodySizeMiddleware:
                 await JSONResponse(status_code=413, content={"detail": message})(scope, receive, send)
 
 
+@asynccontextmanager
+async def application_lifespan(application: FastAPI):
+    try:
+        yield
+    finally:
+        await application.state.realtime_hub.close()
+
+
 def create_app():
-    application = FastAPI(title="두드리 API", version="0.1.0")
+    application = FastAPI(title="두드리 API", version="0.1.0", lifespan=application_lifespan)
+    application.state.realtime_hub = realtime.RealtimeHub()
     reference_paths = {f"/api/v1/me/document-references/{kind}": (
         document_references.MAX_REFERENCE_REQUEST_BYTES,
         "참고 파일은 파일당 10MB까지 업로드할 수 있습니다.",

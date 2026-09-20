@@ -2,10 +2,13 @@
 import asyncio
 import hashlib
 import secrets
+from collections import deque
+from dataclasses import dataclass
 from datetime import timedelta
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
-from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy import delete, func, select, update
+from sqlalchemy.orm import Session
 
 from .auth import SessionActor
 from .common import DB, utc
@@ -19,10 +22,118 @@ _TICKET_LIFETIME = timedelta(minutes=2)
 # small overlap rather than trusting UUID/timestamp ordering: another worker
 # can commit an earlier insert after a later one is already observed.
 _EVENT_REPLAY_WINDOW = timedelta(minutes=10)
-_POLL_INTERVAL_SECONDS = 0.5
+_DISPATCH_INTERVAL_SECONDS = 1
 _MAX_EVENTS_PER_POLL = 100
 _MAX_DELIVERED_EVENT_IDS = 500
 _MAX_TICKETS_PER_MINUTE = 10
+_MAX_PENDING_MESSAGES = 100
+
+
+@dataclass
+class _Subscriber:
+    user_id: str
+    session_id: str
+    messages: asyncio.Queue[dict]
+
+
+def _dispatch_batch(engine, session_ids: set[str]):
+    """Read shared invalidations once, off the API event loop."""
+    with Session(engine) as db:
+        events = list(db.execute(select(RealtimeEvent.id, RealtimeEvent.target_user_id, RealtimeEvent.kind).where(
+            RealtimeEvent.created_at >= now() - _EVENT_REPLAY_WINDOW
+        ).order_by(RealtimeEvent.created_at.desc(), RealtimeEvent.id.desc()).limit(_MAX_EVENTS_PER_POLL)))
+        active_sessions = set()
+        if session_ids:
+            active_sessions = set(db.scalars(select(AuthSession.id).join(User).where(
+                AuthSession.id.in_(session_ids),
+                User.account_status == "active",
+                AuthSession.revoked.is_(False),
+                AuthSession.rotated.is_(False),
+                AuthSession.access_expires_at > now(),
+                AuthSession.expires_at > now(),
+            )))
+    return events, active_sessions
+
+
+class RealtimeHub:
+    """One database poller per API process, regardless of connected clients."""
+
+    def __init__(self):
+        self._subscribers: dict[str, _Subscriber] = {}
+        self._task: asyncio.Task | None = None
+        self._seen: set[str] = set()
+        self._seen_order: deque[str] = deque()
+
+    async def subscribe(self, user_id: str, session_id: str, engine):
+        subscriber_id = secrets.token_urlsafe(16)
+        messages: asyncio.Queue[dict] = asyncio.Queue(maxsize=_MAX_PENDING_MESSAGES)
+        self._subscribers[subscriber_id] = _Subscriber(user_id, session_id, messages)
+        if self._task is None or self._task.done():
+            self._task = asyncio.create_task(self._run(engine), name="dudri-realtime-dispatcher")
+        return subscriber_id, messages
+
+    async def unsubscribe(self, subscriber_id: str):
+        self._subscribers.pop(subscriber_id, None)
+        if not self._subscribers and self._task and not self._task.done():
+            self._task.cancel()
+            self._task = None
+
+    async def close(self):
+        if self._task and not self._task.done():
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+        self._task = None
+        self._subscribers.clear()
+
+    def _remember(self, event_id: str) -> bool:
+        if event_id in self._seen:
+            return False
+        if len(self._seen_order) >= _MAX_DELIVERED_EVENT_IDS:
+            self._seen.discard(self._seen_order.popleft())
+        self._seen.add(event_id)
+        self._seen_order.append(event_id)
+        return True
+
+    @staticmethod
+    def _send(subscriber: _Subscriber, message: dict):
+        try:
+            subscriber.messages.put_nowait(message)
+        except asyncio.QueueFull:
+            # These are cache invalidations. A later one is redundant while a
+            # client already has pending work, so do not grow memory unbounded.
+            pass
+
+    async def _dispatch(self, events, active_sessions: set[str]):
+        subscribers = tuple(self._subscribers.values())
+        for subscriber in subscribers:
+            if subscriber.session_id not in active_sessions:
+                self._send(subscriber, {"type": "close"})
+        for event_id, target_user_id, kind in events:
+            if not self._remember(event_id):
+                continue
+            message = {"type": "event", "id": event_id, "kind": kind}
+            for subscriber in subscribers:
+                if subscriber.session_id in active_sessions and (target_user_id is None or target_user_id == subscriber.user_id):
+                    self._send(subscriber, message)
+
+    async def _run(self, engine):
+        try:
+            while self._subscribers:
+                session_ids = {subscriber.session_id for subscriber in self._subscribers.values()}
+                try:
+                    events, active_sessions = await asyncio.to_thread(_dispatch_batch, engine, session_ids)
+                    await self._dispatch(events, active_sessions)
+                    delay = _DISPATCH_INTERVAL_SECONDS
+                except Exception:
+                    # A transient database outage must not terminate every
+                    # socket. Their next normal API read still reports it.
+                    delay = 3
+                await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            raise
 
 
 def _digest(value: str) -> str:
@@ -93,54 +204,39 @@ async def realtime_socket(websocket: WebSocket, db: DB):
     user_id, session_id, expiry = user.id, session.id, utc(ticket.expires_at)
     db.commit()
     await websocket.accept(subprotocol=_PROTOCOL)
-    delivered_event_ids: set[str] = set()
+    hub: RealtimeHub = websocket.app.state.realtime_hub
+    subscriber_id, messages = await hub.subscribe(user_id, session_id, db.get_bind())
     await websocket.send_json({"type": "ready"})
     try:
         while expiry > now():
-            poll_started = asyncio.get_running_loop().time()
-            # End each read transaction so SQLite and PostgreSQL connections
-            # see events committed by a different API worker.
-            db.rollback()
-            person = db.get(User, user_id)
-            active_session = db.get(AuthSession, session_id)
-            if (not person or person.account_status != "active" or not active_session
-                    or active_session.user_id != user_id or active_session.revoked or active_session.rotated
-                    or utc(active_session.access_expires_at) <= now() or utc(active_session.expires_at) <= now()):
-                db.rollback()
-                await websocket.close(code=1008)
-                return
-            events = list(db.scalars(select(RealtimeEvent).where(
-                or_(RealtimeEvent.target_user_id == user_id, RealtimeEvent.target_user_id.is_(None)),
-                RealtimeEvent.created_at >= now() - _EVENT_REPLAY_WINDOW)
-                .order_by(RealtimeEvent.created_at.desc(), RealtimeEvent.id.desc()).limit(_MAX_EVENTS_PER_POLL)))
-            # Do not retain a database connection while network IO waits. The
-            # synchronous API pool is deliberately small on the free tier.
-            event_messages = [{"type": "event", "id": event.id, "kind": event.kind} for event in events]
-            if len(delivered_event_ids) >= _MAX_DELIVERED_EVENT_IDS:
-                delivered_event_ids.intersection_update(event["id"] for event in event_messages)
-            db.rollback()
-            for event in event_messages:
-                if event["id"] in delivered_event_ids:
-                    continue
-                await websocket.send_json(event)
-                delivered_event_ids.add(event["id"])
+            remaining = max(0, (expiry - now()).total_seconds())
+            incoming = asyncio.create_task(websocket.receive_text())
+            outgoing = asyncio.create_task(messages.get())
             try:
-                remaining = max(0, _POLL_INTERVAL_SECONDS - (asyncio.get_running_loop().time() - poll_started))
-                message = await asyncio.wait_for(websocket.receive_text(), timeout=remaining)
-                if message == "ping":
+                done, pending = await asyncio.wait((incoming, outgoing), timeout=remaining,
+                                                   return_when=asyncio.FIRST_COMPLETED)
+                for task in pending:
+                    task.cancel()
+                if pending:
+                    await asyncio.gather(*pending, return_exceptions=True)
+                if not done:
+                    return
+                if outgoing in done:
+                    message = outgoing.result()
+                    if message["type"] == "close":
+                        await websocket.close(code=1008)
+                        return
+                    await websocket.send_json(message)
+                if incoming in done and incoming.result() == "ping":
                     await websocket.send_json({"type": "pong"})
-            except TimeoutError:
-                pass
             finally:
-                # A buffered flood of client text frames must not turn into an
-                # unbounded database poll loop.  One socket observes at most
-                # one poll interval regardless of how quickly it sends ping.
-                remaining = _POLL_INTERVAL_SECONDS - (asyncio.get_running_loop().time() - poll_started)
-                if remaining > 0:
-                    await asyncio.sleep(remaining)
+                for task in (incoming, outgoing):
+                    if not task.done():
+                        task.cancel()
     except WebSocketDisconnect:
         return
     finally:
+        await hub.unsubscribe(subscriber_id)
         db.rollback()
         # A short lived connection is intentional: the client obtains a fresh
         # credential, which also bounds a ticket after logout/revocation.
