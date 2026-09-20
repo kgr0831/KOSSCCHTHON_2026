@@ -7,6 +7,11 @@ from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from .config import get_settings
 
 
+POSTGRES_POOL_SIZE = 10
+POSTGRES_MAX_OVERFLOW = 10
+POSTGRES_POOL_TIMEOUT_SECONDS = 5
+
+
 class Base(DeclarativeBase):
     pass
 
@@ -21,8 +26,19 @@ def make_engine(url: str):
         # Keep certificate verification if configured; never silently downgrade TLS.
         if parsed.query.get("sslmode") not in ("require", "verify-ca", "verify-full"):
             options["sslmode"] = "require"
-    engine = create_engine(parsed, connect_args=options, pool_pre_ping=True, hide_parameters=True,
-                           **({} if sqlite else {"pool_size": 3, "max_overflow": 2, "pool_recycle": 300}))
+    engine = create_engine(
+        parsed,
+        connect_args=options,
+        pool_pre_ping=True,
+        hide_parameters=True,
+        **({} if sqlite else {
+            "pool_size": POSTGRES_POOL_SIZE,
+            "max_overflow": POSTGRES_MAX_OVERFLOW,
+            "pool_timeout": POSTGRES_POOL_TIMEOUT_SECONDS,
+            "pool_recycle": 300,
+            "pool_use_lifo": True,
+        }),
+    )
     if sqlite:
         @event.listens_for(engine, "connect")
         def sqlite_constraints(connection, _):

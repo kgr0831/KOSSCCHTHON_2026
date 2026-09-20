@@ -9,7 +9,7 @@ from sqlalchemy import event, func, select
 from sqlalchemy.engine import make_url
 
 from app.config import LOCAL_DATABASE_URL, Settings
-from app.db import Base, make_engine
+from app.db import POSTGRES_MAX_OVERFLOW, POSTGRES_POOL_SIZE, POSTGRES_POOL_TIMEOUT_SECONDS, Base, make_engine
 from app.migrate_sqlite import TransferError, copy_rows, counts, source_engine
 from app.models import AuthSession, Job, PersonalSite, RealtimeEvent, RealtimeTicket, SiteVersion, User, now
 
@@ -43,6 +43,9 @@ def test_supabase_tls_and_pooler_connection_options(query, expected):
     assert captured["prepare_threshold"] is None
     assert captured["connect_timeout"] == 10
     assert engine.hide_parameters
+    assert engine.pool.size() == POSTGRES_POOL_SIZE
+    assert engine.pool._max_overflow == POSTGRES_MAX_OVERFLOW
+    assert engine.pool.timeout() == POSTGRES_POOL_TIMEOUT_SECONDS
     engine.dispose()
 
 

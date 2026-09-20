@@ -13,6 +13,8 @@ async function responseError(response: Response): Promise<ApiError> {
   return new ApiError(response.status, typeof message === "string" ? message : "요청을 처리하지 못했습니다.", error?.code || "");
 }
 
+const defaultReadTimeout = localBrowser ? 10_000 : 15_000;
+
 let accessToken: string | null = null;
 let refreshPromise: Promise<boolean> | null = null;
 let authGeneration = 0;
@@ -53,7 +55,13 @@ async function fetchWithSession(path: string, options: RequestInit, retry: boole
   let response: Response;
   try {
     const apiPath = path.startsWith("/api/") ? path : `/api/v1${path}`;
-    response = await fetch(apiPath, { ...options, headers, credentials: "same-origin", cache: "no-store" });
+    const requestOptions: RequestInit = { ...options, headers, credentials: "same-origin", cache: "no-store" };
+    // Reads drive the loading UI, so fail promptly instead of leaving it pending forever.
+    // Long-running AI and write requests keep their caller-provided timeout behavior.
+    if ((options.method || "GET").toUpperCase() === "GET" && !requestOptions.signal) {
+      requestOptions.signal = AbortSignal.timeout(defaultReadTimeout);
+    }
+    response = await fetch(apiPath, requestOptions);
   } catch { throw new ApiError(0, connectionMessage, "BACKEND_UNAVAILABLE"); }
   if (response.status === 401 && retry && !path.startsWith("/auth/")) {
     if (generation !== authGeneration) throw new ApiError(401, "로그인 계정이 변경되었어요. 현재 계정에서 다시 요청해 주세요.", "SESSION_CHANGED");
