@@ -108,6 +108,16 @@ dialog[open] { animation:dialog-enter .22s ease-out; }
   .sidebar-personal { grid-template-columns:repeat(3,minmax(0,1fr)); }
   .sidebar .utility-link { font-size:9px; white-space:normal; }
 }
+@media(min-width:768px) and (max-height:420px) {
+  .sidebar { padding:6px 10px; }
+  .sidebar>.brand,.sidebar .nav-label { display:none; }
+  .sidebar>nav:first-of-type,.sidebar-personal { grid-template-columns:repeat(3,minmax(0,1fr)); gap:2px; }
+  .sidebar .nav-item { min-height:36px; gap:4px; padding:4px; font-size:10px; }
+  .sidebar .nav-icon { width:22px; height:22px; }
+  .sidebar .utility-link { min-height:32px; padding:4px; font-size:9px; white-space:normal; }
+  .sidebar .register-desktop { min-height:36px; margin-top:5px; padding:5px 10px; }
+  .sidebar-bottom { padding-top:5px; }
+}
 @media(max-width:767px) {
   :root { --mobile-nav-height:78px; }
   .main-frame { padding-bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom)); }

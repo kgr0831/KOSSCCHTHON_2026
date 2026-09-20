@@ -369,7 +369,7 @@ a.action-row:hover { background:#f6effe; box-shadow:var(--card-shadow) }
   .topbar-actions { gap:8px }
   .main-content { padding:12px 22px 28px; min-height:calc(100dvh - 180px) }
   .footer { margin:0 22px; padding:20px 0 108px; font-size:9px }
-  .bottom-nav { position:fixed; z-index:25; bottom:0; left:0; right:0; display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); align-items:end; background:#fffffff5; backdrop-filter:blur(14px); border-top:1px solid #f0eaf9; padding:7px 9px max(8px,env(safe-area-inset-bottom)); box-shadow:0 -8px 26px -22px #7550d350 }
+  .bottom-nav { position:fixed; z-index:25; bottom:0; left:0; right:0; display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); align-items:end; background:#fffffff5; backdrop-filter:blur(14px); border-top:1px solid #f0eaf9; padding:7px 9px max(8px,env(safe-area-inset-bottom)); box-shadow:0 -8px 26px -22px #7550d350 }
   .bottom-nav .nav-item { min-height:62px; padding:4px 2px 3px; flex-direction:column; gap:3px; border-radius:18px; font-size:10px; color:#a49dbb }
   .bottom-nav .nav-icon { width:32px; height:32px }
   .bottom-nav .nav-item.active { color:var(--primary); background:transparent }

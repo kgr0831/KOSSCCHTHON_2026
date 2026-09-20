@@ -306,7 +306,7 @@ def create_request(db, user, project, opening_id, candidate_id, kind, message, k
                          initiator_id=user.id, recipient_id=recipient, request_kind=kind, message=message)
     db.add(row)
     db.flush()
-    notify(db, recipient, "project_request", "프로젝트 참여 요청이 도착했어요", "/projects/requests")
+    notify(db, recipient, "project_request", "프로젝트 참여 요청이 도착했어요", "/team-building#requests")
     result = data(row)
     remember(db, user.id, operation, key, request_hash, result)
     return result

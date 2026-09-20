@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { AppOutlet, useAppNavigation, usePathname } from "@/components/app-navigation";
-import { Bell, ChevronRight, Coffee, Compass, House, LogOut, Plus, UserRound, X } from "lucide-react";
+import { Bell, ChevronRight, Coffee, Compass, House, LogOut, Plus, UserRound, UsersRound, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import AuthPage from "@/app/auth/page";
 import { useAuth } from "./providers";
@@ -11,6 +11,7 @@ import { Brand } from "./brand";
 const navigation = [
   { href: "/", title: "홈", icon: House },
   { href: "/explore", title: "탐색", icon: Compass },
+  { href: "/team-building", title: "팀빌딩", icon: UsersRound },
   { href: "/coffee", title: "커피챗", icon: Coffee },
   { href: "/my", title: "마이", icon: UserRound },
 ];

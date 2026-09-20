@@ -19,6 +19,7 @@ const screens = {
   "/coffee/:id": lazy(() => import("@/app/coffee/[id]/page")),
   "/bookings/:id": lazy(() => import("@/app/bookings/[id]/page")),
   "/users/:id": lazy(() => import("@/app/users/[id]/page")),
+  "/team-building": lazy(() => import("@/app/team-building/page")),
   "/projects": lazy(() => import("@/app/projects/page")),
   "/projects/new": lazy(() => import("@/app/projects/new/page")),
   "/projects/:id": lazy(() => import("@/app/projects/[id]/page")),
@@ -29,7 +30,7 @@ function screenKey(path: string) { return path in screens ? path as keyof typeof
 function normalize(href: string) {
   const url = new URL(href, window.location.origin);
   if (url.origin !== window.location.origin) return null;
-  if (url.pathname === "/projects/requests") return "/projects#requests";
+  if (url.pathname === "/projects/requests") return "/team-building#requests";
   if (url.pathname === "/auth") return "/auth";
   if (!screens[screenKey(url.pathname)]) return null;
   // Authentication fragments must never be persisted to app history or storage.
