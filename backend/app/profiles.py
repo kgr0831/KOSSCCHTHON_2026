@@ -1,3 +1,4 @@
+from collections import defaultdict
 from datetime import date
 from typing import Literal
 
@@ -28,56 +29,108 @@ router = APIRouter(prefix="/api/v1")
 
 
 def affiliations_for(db, user_id, public=False):
-    query = select(Affiliation).where(Affiliation.user_id == user_id, Affiliation.withdrawn.is_(False))
+    query = select(Affiliation, University.name).join(University).where(
+        Affiliation.user_id == user_id, Affiliation.withdrawn.is_(False))
     if public:
         query = query.where(Affiliation.is_public.is_(True))
-    return [data(x) | {"university_name": required(db, University, x.university_id).name,
-                       "status_source": "user_input"} for x in db.scalars(query)]
+    return [data(affiliation) | {"university_name": university_name, "status_source": "user_input"}
+            for affiliation, university_name in db.execute(query)]
 
 
 def tags_for(db, user_id, public=False):
-    query = select(UserTag).where(UserTag.user_id == user_id)
+    query = select(UserTag, Tag.name, Tag.kind).join(Tag).where(UserTag.user_id == user_id)
     if public:
         query = query.where(UserTag.is_public.is_(True))
-    return [data(x) | {"name": required(db, Tag, x.tag_id).name, "kind": required(db, Tag, x.tag_id).kind}
-            for x in db.scalars(query)]
+    return [data(user_tag) | {"name": name, "kind": kind}
+            for user_tag, name, kind in db.execute(query)]
+
+
+def public_users(db, users):
+    """Serialize several public profiles without issuing queries per person."""
+    user_ids = [user.id for user in users]
+    if not user_ids:
+        return []
+
+    profiles = {profile.user_id: profile for profile in db.scalars(
+        select(Profile).where(Profile.user_id.in_(user_ids)))}
+    affiliations = defaultdict(list)
+    for affiliation, university_name in db.execute(select(Affiliation, University.name).join(University).where(
+            Affiliation.user_id.in_(user_ids), Affiliation.withdrawn.is_(False), Affiliation.is_public.is_(True))):
+        affiliations[affiliation.user_id].append(data(affiliation) | {
+            "university_name": university_name, "status_source": "user_input"})
+
+    tags = defaultdict(list)
+    for user_tag, name, kind in db.execute(select(UserTag, Tag.name, Tag.kind).join(Tag).where(
+            UserTag.user_id.in_(user_ids), UserTag.is_public.is_(True))):
+        tags[user_tag.user_id].append(data(user_tag) | {"name": name, "kind": kind})
+
+    careers = defaultdict(list)
+    for career in db.scalars(select(CareerEvent).where(CareerEvent.user_id.in_(user_ids),
+            CareerEvent.is_public.is_(True), CareerEvent.withdrawn.is_(False))):
+        careers[career.user_id].append(data(career, exclude=("user_id",)))
+
+    memberships = defaultdict(list)
+    for member, project in db.execute(select(ProjectMember, Project).join(Project).where(
+            ProjectMember.user_id.in_(user_ids), ProjectMember.is_public.is_(True),
+            Project.visibility == "public")):
+        memberships[member.user_id].append(data(member) | {
+            "project_title": project.title, "summary": project.summary})
+
+    preferences = {preference.user_id: preference for preference in db.scalars(
+        select(Preference).where(Preference.user_id.in_(user_ids), Preference.is_public.is_(True)))}
+    verifications = defaultdict(list)
+    for verification in db.scalars(select(Verification).where(Verification.user_id.in_(user_ids),
+            (Verification.expires_at.is_(None)) | (Verification.expires_at > now()))):
+        verifications[verification.user_id].append(verification)
+
+    result = []
+    for user in users:
+        profile = profiles.get(user.id)
+        if not profile:
+            raise HTTPException(404, "프로필을 찾을 수 없습니다.")
+        visible_affiliations = affiliations[user.id]
+        public_profile = {
+            "id": user.id,
+            "display_name": profile.display_name if profile.name_is_public else "동문",
+            "school_affiliations": visible_affiliations,
+            "tags": tags[user.id],
+            "career_events": careers[user.id],
+            "project_members": memberships[user.id],
+        }
+        if profile.bio_is_public:
+            public_profile["bio"] = profile.bio
+        if profile.avatar_is_public:
+            public_profile["avatar_url"] = profile.avatar_url
+        if preference := preferences.get(user.id):
+            public_profile["preferences"] = data(preference, exclude=("user_id", "revision"))
+        visible_ids = {affiliation["id"] for affiliation in visible_affiliations}
+        public_profile["verifications"] = [{
+            "kind": verification.verification_kind,
+            "verified_at": data(verification)["verified_at"],
+            "meaning": "이메일 접근 확인",
+        } for verification in verifications[user.id]
+            if verification.verification_kind != "school" or verification.school_affiliation_id in visible_ids]
+        result.append(public_profile)
+    return result
 
 
 def public_user(db, user):
-    profile = required(db, Profile, user.id)
-    result = {"id": user.id, "display_name": profile.display_name if profile.name_is_public else "동문",
-              "school_affiliations": affiliations_for(db, user.id, True), "tags": tags_for(db, user.id, True)}
-    if profile.bio_is_public:
-        result["bio"] = profile.bio
-    if profile.avatar_is_public:
-        result["avatar_url"] = profile.avatar_url
-    result["career_events"] = [data(x, exclude=("user_id",)) for x in db.scalars(select(CareerEvent).where(
-        CareerEvent.user_id == user.id, CareerEvent.is_public.is_(True), CareerEvent.withdrawn.is_(False)))]
-    result["project_members"] = []
-    for member in db.scalars(select(ProjectMember).join(Project).where(ProjectMember.user_id == user.id,
-                            ProjectMember.is_public.is_(True), Project.visibility == "public")):
-        project = required(db, Project, member.project_id)
-        result["project_members"].append(data(member) | {"project_title": project.title, "summary": project.summary})
-    pref = required(db, Preference, user.id)
-    if pref.is_public:
-        result["preferences"] = data(pref, exclude=("user_id", "revision"))
-    verifications = list(db.scalars(select(Verification).where(Verification.user_id == user.id,
-        (Verification.expires_at.is_(None)) | (Verification.expires_at > now()))))
-    visible_affiliations = {x["id"] for x in result["school_affiliations"]}
-    result["verifications"] = [{"kind": x.verification_kind, "verified_at": data(x)["verified_at"],
-        "meaning": "이메일 접근 확인"} for x in verifications
-        if x.verification_kind != "school" or x.school_affiliation_id in visible_affiliations]
-    return result
+    return public_users(db, [user])[0]
 
 
 @router.get("/me")
 def me(db: DB, user: Actor):
+    profile_and_preferences = db.execute(select(Profile, Preference).join(
+        Preference, Preference.user_id == Profile.user_id).where(Profile.user_id == user.id)).one_or_none()
+    if not profile_and_preferences:
+        raise HTTPException(404, "프로필을 찾을 수 없습니다.")
+    profile, preferences = profile_and_preferences
     return {"id": user.id, "login_email": user.login_email, "account_status": user.account_status,
             "subscription_plan": user.subscription_plan,
             "google_connected": bool(user.supabase_user_id),
-            "profile": data(required(db, Profile, user.id)),
+            "profile": data(profile),
             "school_affiliations": affiliations_for(db, user.id),
-            "preferences": data(required(db, Preference, user.id)), "tags": tags_for(db, user.id)}
+            "preferences": data(preferences), "tags": tags_for(db, user.id)}
 
 
 class ProfilePatch(Input):

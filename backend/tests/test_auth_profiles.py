@@ -59,6 +59,19 @@ def test_private_fields_and_revision_conflict(world):
     assert c.patch("/api/v1/me", headers=a, json=private).status_code == 409
 
 
+def test_recommendations_batch_public_profiles_without_leaking_private_fields(world):
+    c, owner, viewer = world["client"], world["auth"](0), world["auth"](1)
+    private = {"revision": 1, "display_name": "비공개 이름", "bio": "비공개 소개",
+               "name_is_public": False, "bio_is_public": False}
+    assert c.patch("/api/v1/me", headers=owner, json=private).status_code == 200
+
+    response = c.get("/api/v1/recommendations", headers=viewer)
+    assert response.status_code == 200
+    profile = next(item for item in response.json()["items"] if item["id"] == world["users"][0])
+    assert profile["display_name"] == "동문"
+    assert "bio" not in profile
+
+
 def test_concurrent_profile_edits_one_wins(world):
     c, headers = world["client"], world["auth"](0)
     def edit(name):

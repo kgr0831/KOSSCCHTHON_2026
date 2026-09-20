@@ -10,7 +10,7 @@ from .ai import AIProvider, get_ai
 from .auth import Actor, Input
 from .common import DB, data
 from .models import CareerPlan, User
-from .profiles import public_user
+from .profiles import public_user, public_users
 
 router = APIRouter(prefix="/api/v1")
 
@@ -20,7 +20,8 @@ def recommendations(db: DB, user: Actor):
     people = list(db.scalars(select(User).where(User.id != user.id, User.account_status == "active")))
     # Deliberately arbitrary: no inferred compatibility, trust, or fabricated scores.
     people.sort(key=lambda x: hashlib.sha256(f"{date.today()}:{user.id}:{x.id}".encode()).digest())
-    return {"mode": "temporary", "label": "임시 추천 · 적합도 순위가 아닌 임의 순서예요", "items": [public_user(db, x) for x in people[:6]]}
+    return {"mode": "temporary", "label": "임시 추천 · 적합도 순위가 아닌 임의 순서예요",
+            "items": public_users(db, people[:6])}
 
 
 class Step(Input):

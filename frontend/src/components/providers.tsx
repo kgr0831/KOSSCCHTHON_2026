@@ -51,7 +51,10 @@ function useRealtime(userId: string | undefined) {
           if (socket !== current) return;
           let message: { type?: string; id?: string };
           try { message = JSON.parse(event.data); } catch { return; }
-          if (message.type === "ready") { void client.invalidateQueries(); return; }
+          // `ready` only confirms the socket is open. The account queries were
+          // just fetched to obtain the ticket, so refetching all of them here
+          // causes an avoidable second burst on every page load/reconnect.
+          if (message.type === "ready") return;
           if (message.type !== "event" || !message.id || seen.has(message.id)) return;
           seen.add(message.id);
           if (seen.size > 500) seen.delete(seen.values().next().value!);
